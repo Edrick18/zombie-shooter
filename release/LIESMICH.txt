@@ -1,4 +1,4 @@
-ZOMBIE-SHOOTER – Prototyp v0.1.0
+ZOMBIE-SHOOTER – Prototyp v0.2.0
 ================================
 
 Starten
@@ -15,7 +15,20 @@ Der allererste Start dauert ein paar Sekunden länger (Ladebild "Gleich geht's l
 Worum es geht
 -------------
 Du bist Kandidat einer Gameshow und überlebst Welle um Welle Zombies. Aus Kisten kommen
-Waffen und Gegenstände, die du in deinen Rucksack packst. Wie du packst, bestimmt deinen Build.
+Waffen, Kameras und Gegenstände, die du in deinen Rucksack packst. Wie du packst, bestimmt
+deinen Build. Nach jedem Lauf kommen deine Punkte aufs Konto. Damit schaltest du im
+"Programm" Pakete frei: Was drin ist, liegt danach in den Kisten.
+
+
+Neu in v0.2.0
+-------------
+- Ton, mit Lautstärke-Regler in den Einstellungen.
+- Das Programm: elf Pakete mit neuen Waffen, Kameras und Gegenständen zum Freischalten.
+- Zehn neue Waffen, darunter Flammenwerfer, Dauerstrahl, Granatwerfer und Armbrust.
+- Fünf Kameras, die für dich kämpfen, und Zubehör, das sie stärker macht.
+- Viele neue Gegenstände: Schild, Minen, Gift, Ausweichsprung und mehr.
+- Größeres Studio mit vier Räumen zum Kaufen. Die Waffen an der Wand gibt es nicht mehr.
+- Späte Wellen sind härter: mehr Zombies, sie kommen schneller und schlagen fester zu.
 
 
 Steuerung
@@ -26,9 +39,11 @@ Linke Maustaste  schießen (mit beiden Waffen, wenn du zwei hältst)
 R                nachladen
 Leertaste        springen
 Umschalt         sprinten
-E                benutzen (Tür öffnen, Waffe an der Wand kaufen)
+Q                ausweichen (nur mit dem Gegenstand "Notausgang")
+E                Tür öffnen (kostet Punkte)
 Tab              Rucksack öffnen und schließen (das Spiel hält dabei an)
-Esc              Pause, dort auch die Einstellungen (Maus, Sichtfeld, Grafik, FPS-Anzeige)
+Esc              Pause, dort auch die Einstellungen (Maus, Sichtfeld, Grafik, Lautstärke)
+P                Programm öffnen (in der Kandidatenwahl und nach dem Game Over)
 
 In der Kistenwahl: Taste 1, 2 oder 3 oder eine Karte anklicken.
 
@@ -38,7 +53,9 @@ Rucksack
 - Gegenstände mit der Maus ziehen, mit R oder Rechtsklick drehen.
 - Was als Waffe im Raster liegt, hältst du in der Hand. Du hast zwei Hände:
   eine Zweihand-Waffe oder bis zu zwei Einhand-Waffen.
-- Sterne zeigen, worauf ein Gegenstand wirkt. Liegt eine Waffe auf dem Stern, ist er gefüllt.
+- Jede Kamera im Raster fliegt neben dir her und kämpft mit.
+- Sterne zeigen, worauf ein Gegenstand wirkt. Liegt das Richtige auf dem Stern (eine Waffe
+  oder eine Kamera, je nach Gegenstand), ist er gefüllt.
 - Zwei gleiche Gegenstände in gleicher Rarität aufeinander ziehen: Es wird einer der nächsten
   Rarität (Gewöhnlich, Ungewöhnlich, Selten, Episch, Legendär).
 - Rucksack-Teile an den Rand legen: Der Rucksack wird größer.
@@ -46,8 +63,17 @@ Rucksack
 - Munition ist unendlich, nachladen musst du trotzdem.
 
 
+Punkte und Konto
+----------------
+- Im Lauf kaufst du mit Punkten Räume. Das kostet dich nichts vom Konto.
+- Am Ende des Laufs kommen alle verdienten Punkte aufs Konto (ohne Verkaufserlöse).
+- Im Programm kaufst du damit Pakete. Am Anfang sind nur wenige Waffen und Gegenstände frei.
+
+
 Gut zu wissen
 -------------
-- Es ist ein Prototyp: kein Ton, einfache Grafik, die Schwierigkeit ist noch nicht abgestimmt.
-- Einstellungen werden gespeichert unter %APPDATA%\Godot\app_userdata\Zombie-Shooter.
+- Es ist ein Prototyp: einfache Grafik, Schwierigkeit, Preise und Lautstärken sind noch
+  nicht abgestimmt.
+- Einstellungen und Spielstand liegen unter %APPDATA%\Godot\app_userdata\Zombie-Shooter
+  (settings.cfg und progress.cfg). Wer von vorn anfangen will, löscht progress.cfg.
 - Rückmeldungen sind willkommen: Was macht Spaß, was nervt, was ist zu stark oder zu schwach?
