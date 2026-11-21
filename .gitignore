@@ -2,3 +2,5 @@
 *.tmp
 /build/
 /_shots/
+/release/*
+!/release/LIESMICH.txt

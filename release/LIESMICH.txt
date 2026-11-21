@@ -1,0 +1,53 @@
+ZOMBIE-SHOOTER – Prototyp v0.1.0
+================================
+
+Starten
+-------
+ZombieShooter.exe doppelklicken. Es muss nichts installiert werden.
+
+Windows zeigt beim ersten Start vielleicht "Der Computer wurde durch Windows geschützt",
+weil die Datei nicht signiert ist. Dann auf "Weitere Informationen" und "Trotzdem ausführen"
+klicken.
+
+Der allererste Start dauert ein paar Sekunden länger (Ladebild "Gleich geht's los").
+
+
+Worum es geht
+-------------
+Du bist Kandidat einer Gameshow und überlebst Welle um Welle Zombies. Aus Kisten kommen
+Waffen und Gegenstände, die du in deinen Rucksack packst. Wie du packst, bestimmt deinen Build.
+
+
+Steuerung
+---------
+W A S D          laufen
+Maus             zielen
+Linke Maustaste  schießen (mit beiden Waffen, wenn du zwei hältst)
+R                nachladen
+Leertaste        springen
+Umschalt         sprinten
+E                benutzen (Tür öffnen, Waffe an der Wand kaufen)
+Tab              Rucksack öffnen und schließen (das Spiel hält dabei an)
+Esc              Pause, dort auch die Einstellungen (Maus, Sichtfeld, Grafik, FPS-Anzeige)
+
+In der Kistenwahl: Taste 1, 2 oder 3 oder eine Karte anklicken.
+
+
+Rucksack
+--------
+- Gegenstände mit der Maus ziehen, mit R oder Rechtsklick drehen.
+- Was als Waffe im Raster liegt, hältst du in der Hand. Du hast zwei Hände:
+  eine Zweihand-Waffe oder bis zu zwei Einhand-Waffen.
+- Sterne zeigen, worauf ein Gegenstand wirkt. Liegt eine Waffe auf dem Stern, ist er gefüllt.
+- Zwei gleiche Gegenstände in gleicher Rarität aufeinander ziehen: Es wird einer der nächsten
+  Rarität (Gewöhnlich, Ungewöhnlich, Selten, Episch, Legendär).
+- Rucksack-Teile an den Rand legen: Der Rucksack wird größer.
+- Was du nicht brauchst, auf "Verkaufen" ziehen.
+- Munition ist unendlich, nachladen musst du trotzdem.
+
+
+Gut zu wissen
+-------------
+- Es ist ein Prototyp: kein Ton, einfache Grafik, die Schwierigkeit ist noch nicht abgestimmt.
+- Einstellungen werden gespeichert unter %APPDATA%\Godot\app_userdata\Zombie-Shooter.
+- Rückmeldungen sind willkommen: Was macht Spaß, was nervt, was ist zu stark oder zu schwach?
