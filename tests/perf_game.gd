@@ -17,6 +17,7 @@ extends SceneTree
 
 const Balance := preload("res://scripts/core/balance.gd")
 const UpgradeState := preload("res://scripts/core/upgrade_state.gd")
+const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const ShaderKeep := preload("res://scripts/game/fx/shader_keep.gd")
 
 const MAIN_SCENE: String = "res://scenes/main.tscn"
@@ -33,6 +34,9 @@ var _last_usec: int = 0
 var _keep_alive: bool = false
 var _worst_overall: float = 0.0
 var _spike_total: int = 0
+## Mit "-- trace": Signale seit dem letzten Bild, gedruckt bei jedem Bild über SPIKE_MS.
+var _trace: PackedStringArray = PackedStringArray()
+var _trace_on: bool = false
 
 
 func _initialize() -> void:
@@ -44,6 +48,9 @@ func _process(_delta: float) -> bool:
 	var now: int = Time.get_ticks_usec()
 	if _last_usec > 0:
 		_frame_ms.append(float(now - _last_usec) / 1000.0)
+		if _trace_on and float(now - _last_usec) / 1000.0 > SPIKE_MS:
+			print("  langes Bild %.1f ms, davor: %s" % [float(now - _last_usec) / 1000.0, ", ".join(_trace)])
+	_trace.clear()
 	_last_usec = now
 	if _keep_alive and is_instance_valid(_main):
 		var player: Node = _main.get("player") as Node
@@ -67,7 +74,19 @@ func _run() -> void:
 	root.mode = Window.MODE_WINDOWED
 	root.size = WINDOW_SIZE
 	_game = root.get_node("Game")
+	# Dieses Werkzeug darf den echten Spielstand (Konto, Pakete) nie anfassen.
+	_game.set("progress_file_enabled", false)
+	(_game.get("progress") as RefCounted).set("unlock_all", true)
 	_events = root.get_node("Events")
+	if OS.get_cmdline_user_args().has("trace"):
+		_trace_on = true
+		for signal_info: Dictionary in _events.get_signal_list():
+			var signal_name: String = String(signal_info["name"])
+			var arg_count: int = (signal_info["args"] as Array).size()
+			if signal_name in ["ready", "renamed", "tree_entered", "tree_exiting", "tree_exited"]:
+				continue
+			var note: Callable = _trace.append.bind(signal_name)
+			_events.connect(signal_name, note.unbind(arg_count) if arg_count > 0 else note)
 	var load_start: int = Time.get_ticks_msec()
 	_main = (load(MAIN_SCENE) as PackedScene).instantiate()
 	if OS.get_cmdline_user_args().has("nowarm"):
@@ -149,18 +168,60 @@ func _run() -> void:
 			await _measure("Zombie %s stirbt, Mal %d" % [type, pass_index + 1], 0.8)
 	await _clear_field()
 
-	# --- Volle Welle mit Dauerfeuer und allen Effekten ---
-	_set_upgrades({"chain_lightning": 5, "pierce": 5, "corpse_explosion": 5, "burn": 3, "drone": 3, "reload_shockwave": 2})
-	await _wait(1.5)
-	_game.call("add_points", 5000)
-	_weapons().call("give_weapon", "shotgun")
+	# --- Ausbau 3 (Abschnitt 22): Gegenstände an der Waffe, neue Waffen ---
+	for _i: int in 4:
+		_game.call("grant_item", "bag_large", 1)
+		await process_frame
 	_weapons().call("give_weapon", "smg")
+	await process_frame
+	for mod_id: String in ["ricochet", "punchline", "frost", "opener", "chain_lightning", "burn", "poison"]:
+		if not _attach(mod_id, 3):
+			print("Hinweis: %s fand keinen Platz an der Waffe." % mod_id)
+	_game.call("sync_build")
+	await process_frame
+	await _fire_test("Gegenstände an der Waffe (Querschläger, Schlusspointe, Trockeneis)", "smg", 4.0)
+	for weapon_id: String in ["burst_pistol", "nail_gun", "machine_pistol", "crossbow", "grenade_launcher",
+			"flamethrower", "beam", "tesla", "lmg", "auto_shotgun"]:
+		await _fire_test("Neue Waffe %s" % weapon_id, weapon_id, 1.6)
+
+	# --- Kameras, Minen und die Gegenstände für den Spieler ---
+	_drop_weapons()
+	for item_id: String in ["drone", "cam_tele", "cam_flash", "cam_slow", "cam_director", "cam_uplink", "mine",
+			"thorns", "jammer", "disco_ball", "shield", "dash", "kill_heal", "snack", "revive",
+			"corpse_explosion", "reload_shockwave"]:
+		_game.call("grant_item", item_id, 3)
+		await process_frame
+	print("Kameras im Spiel: %d, Ablage: %d" % [(_game.get("cameras") as Array).size(),
+			((_game.get("backpack") as RefCounted).call("storage_items") as Array).size()])
+	await _measure("Neue Gegenstände erscheinen (Kameras, Discokugel, Schild)", 1.0)
+	for pass_index: int in 2:
+		for offset: Vector3 in [Vector3(0.0, 0.0, -5.0), Vector3(2.5, 0.0, -4.5), Vector3(-2.5, 0.0, -4.5),
+				Vector3(1.0, 0.0, -8.0), Vector3(-1.0, 0.0, -8.5)]:
+			var victim: Node3D = _spawn("walker", _spawn_point() + offset, 14)
+			victim.call("apply_poison", 4.0, 4.0)
+			victim.call("apply_burn", 4.0, 4.0)
+			victim.call("apply_slow", 0.3, 2.0)
+			victim.call("apply_mark", 0.3, 4.0)
+		_spawn("elite", _spawn_point() + Vector3(0.0, 0.0, -10.0), 14)
+		_player().call("take_damage", 12.0)
+		_player().call("try_dash")
+		# 6,5 s: Störsender, Minen, Kaktus, alle fünf Kameratypen und die Discokugel wirken in dieser Zeit.
+		await _measure("Kameras, Minen, Kaktus, Gift, Brand, Störsender, Mal %d" % (pass_index + 1), 6.5)
+		_player().call("heal", 500.0)
+		await _clear_field()
+		_place(_spawn_point(), _spawn_point() + Vector3(0.0, 1.2, -10.0))
+
+	# --- Volle Welle mit Dauerfeuer und allen Effekten ---
+	_game.call("add_points", 5000)
+	_weapons().call("give_weapon", "smg")
+	await process_frame
+	await process_frame
 	_wave_manager().call("start_wave", 8)
 	await _measure("Welle 8 läuft an (Zombies erscheinen)", 4.0)
 	_frame_ms.clear()
 	var fire_start: int = Time.get_ticks_msec()
-	var until: int = fire_start + 8000
-	var weapon_order: Array[String] = ["smg", "shotgun", "pistol", "smg"]
+	var until: int = fire_start + 12000
+	var weapon_order: Array[String] = ["smg", "flamethrower", "tesla", "grenade_launcher", "beam", "shotgun"]
 	var weapon_index: int = -1
 	while Time.get_ticks_msec() < until:
 		# Alle zwei Sekunden die Waffe wechseln, damit jede Waffe ihre Effekte zeigt.
@@ -168,6 +229,7 @@ func _run() -> void:
 		var wanted: int = mini((Time.get_ticks_msec() - fire_start) / 2000, weapon_order.size() - 1)
 		if wanted != weapon_index:
 			weapon_index = wanted
+			_drop_weapons()
 			_weapons().call("give_weapon", weapon_order[weapon_index])
 			_weapons().call("refill_ammo", weapon_order[weapon_index])
 		var target: Node3D = _nearest_zombie()
@@ -177,7 +239,7 @@ func _run() -> void:
 		if bool((_main.get("chest_choice") as Node).call("is_open")):
 			(_main.get("chest_choice") as Node).call("choose", 0)
 		await process_frame
-	await _measure("Welle 8, Dauerfeuer mit allen Waffen und Effekten (8 s)", 0.1, false)
+	await _measure("Welle 8, Dauerfeuer mit sechs Waffen und allen Effekten (12 s)", 0.1, false)
 	print("Zombies am Leben: %d, Knoten im Baum: %d, Objekte: %d" % [
 		get_nodes_in_group("zombies").size(), get_node_count(),
 		int(Performance.get_monitor(Performance.OBJECT_COUNT))])
@@ -281,6 +343,59 @@ func _clear_field() -> void:
 		node.remove_from_group("chests")
 		node.queue_free()
 	await _wait(0.1)
+
+
+## Nimmt alle Waffen aus dem Rucksack (sonst läuft bei vielen Waffenwechseln die Ablage voll).
+func _drop_weapons() -> void:
+	var pack: RefCounted = _game.get("backpack") as RefCounted
+	for entry: Dictionary in (_game.get("loadout") as Array).duplicate():
+		if int(entry["uid"]) > 0:
+			pack.call("remove", int(entry["uid"]))
+	for entry: Dictionary in (pack.call("storage_items") as Array).duplicate():
+		if ItemDefs.is_weapon(String(entry["id"])):
+			pack.call("remove", int(entry["uid"]))
+
+
+## Legt einen Gegenstand so in den Rucksack, dass sein Stern auf der ersten Waffe liegt.
+## Probiert dafür alle Felder und Drehungen durch. false: kein passender Platz.
+func _attach(mod_id: String, level: int) -> bool:
+	var pack: RefCounted = _game.get("backpack") as RefCounted
+	var uid: int = int(pack.call("add_item", mod_id, level))
+	for rot: int in 4:
+		for y: int in range(-1, Balance.BACKPACK_ROWS + 2):
+			for x: int in range(-1, Balance.BACKPACK_COLS + 2):
+				if not bool(pack.call("place", uid, Vector2i(x, y), rot)):
+					continue
+				var loadout: Array = pack.call("loadout")
+				if not loadout.is_empty() and ((loadout[0] as Dictionary)["copies"] as Dictionary).has(mod_id):
+					return true
+	pack.call("remove", uid)
+	return false
+
+
+## Gibt dem Spieler eine Waffe, stellt Elite-Zombies davor und feuert die angegebene Zeit lang.
+func _fire_test(label: String, weapon_id: String, seconds: float) -> void:
+	if String(_weapons().call("get_current_weapon_id")) != weapon_id:
+		_drop_weapons()
+		_weapons().call("give_weapon", weapon_id)
+	_weapons().call("refill_ammo", weapon_id)
+	for offset: Vector3 in [Vector3(0.0, 0.0, -6.0), Vector3(2.0, 0.0, -7.0), Vector3(-2.0, 0.0, -7.0), Vector3(0.5, 0.0, -9.0)]:
+		_spawn("elite", _spawn_point() + offset, 14)
+	await process_frame
+	await process_frame
+	_frame_ms.clear()
+	var until: int = Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < until:
+		var target: Node3D = _nearest_zombie()
+		if target != null:
+			_player().call("look_at_point", target.call("get_center_position"))
+		_weapons().call("try_fire")
+		if bool((_main.get("chest_choice") as Node).call("is_open")):
+			(_main.get("chest_choice") as Node).call("choose", 0)
+		await process_frame
+	await _measure(label, 0.4, false)
+	await _clear_field()
+	_place(_spawn_point(), _spawn_point() + Vector3(0.0, 1.2, -10.0))
 
 
 func _set_upgrades(levels: Dictionary) -> void:

@@ -11,12 +11,32 @@ extends CharacterBody3D
 ##   └─ WeaponController (weapon_controller.gd)
 ##
 ## Der Spieler setzt Game.player in _ready, stellt sich bei Events.run_started auf Anfang
-## (volles Leben) und ruft bei Events.upgrade_chosen selbst refresh_stats().
+## (volles Leben, volles Schild, alle Ausweichsprünge) und ruft bei Events.upgrade_chosen und
+## Events.build_changed selbst refresh_stats().
 ##
 ## Eingaben wirken nur im State PLAYING und solange der Spieler lebt. Die Schüsse folgen immer
 ## der Kamera (Fadenkreuz = Bildmitte), auch während Rückstoß und Treffer-Wackeln.
+##
+## Sicherheitsglas (Gegenstand "shield", Architektur 19.2): shield / max_shield. Schaden trifft
+## zuerst das Schild, nur der Rest das Leben. Nach Balance.SHIELD_RECHARGE_DELAY Sekunden ohne
+## Schaden lädt es mit SHIELD_RECHARGE_RATE je Sekunde. Signal player_shield_changed.
+##
+## Notausgang (Gegenstand "dash"): Taste Q oder try_dash(). Ein Ausweichsprung kostet eine Ladung
+## (dash_charges / max_dash_charges), bewegt den Spieler Balance.DASH_TIME Sekunden lang mit
+## DASH_SPEED und macht ihn so lange unverwundbar. Die Ladungen kommen nacheinander zurück.
+## Signale player_dashed und dash_charges_changed.
+##
+## Zweite Staffel (Gegenstand "revive", Architektur 22.3): Jedes Exemplar ist eine Ladung
+## (revive_charges / max_revive_charges). Ein tödlicher Treffer verbraucht eine bereite Ladung und
+## tötet nicht: Der Spieler steht mit Balance.REVIVE_HP_SHARE seines Maximal-Lebens wieder,
+## ist REVIVE_INVULNERABILITY Sekunden unverwundbar und stößt alle Zombies im Umkreis
+## REVIVE_SHOCKWAVE_RADIUS weg (kein Schaden). Die Ladung kommt zurück, wenn so viele Wellen
+## geschafft sind, wie ihre Rarität verlangt (Stufenwert "waves", gezählt über wave_cleared).
+## Signale player_revived und revive_charges_changed.
 
 const Balance := preload("res://scripts/core/balance.gd")
+const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
+const Fx := preload("res://scripts/game/fx/fx.gd")
 const WeaponController := preload("res://scripts/game/player/weapon_controller.gd")
 const ViewModel := preload("res://scripts/game/player/view_model.gd")
 const Settings := preload("res://scripts/game/settings.gd")
@@ -31,6 +51,9 @@ const STEP_SMOOTH_RATE: float = 16.0
 const STEP_SMOOTH_MIN: float = 0.05
 const SPRINT_FOV_BOOST: float = 6.0
 const FOV_LERP_RATE: float = 8.0
+## Ausweichsprung: Das Sichtfeld weitet sich kurz um so viele Grad (schneller als beim Sprinten).
+const DASH_FOV_BOOST: float = 9.0
+const DASH_FOV_LERP_RATE: float = 22.0
 const BOB_FREQUENCY: float = 1.75
 const BOB_HEIGHT: float = 0.022
 const BOB_WIDTH: float = 0.014
@@ -53,6 +76,27 @@ var hp: float = Balance.PLAYER_MAX_HP
 var max_hp: float = Balance.PLAYER_MAX_HP
 ## Nach dem Tod true. Dann keine Bewegung, kein Schaden, keine Schüsse mehr.
 var is_dead: bool = false
+## Schild aus dem Sicherheitsglas: aktuelle und höchste Punkte. max_shield 0 = kein Schild.
+var shield: float = 0.0
+var max_shield: float = 0.0
+## Ausweichsprünge aus dem Notausgang: verfügbare und höchstens mögliche. 0 = kein Notausgang.
+var dash_charges: int = 0
+var max_dash_charges: int = 0
+## Zweite Staffel: bereite Ladungen und Ladungen insgesamt (eine je Exemplar). 0 / 0 = kein Exemplar.
+var revive_charges: int = 0
+var max_revive_charges: int = 0
+
+## Sekunden, bis das Schild wieder lädt (jeder Schaden stellt sie neu).
+var _shield_delay_left: float = 0.0
+## Rest des laufenden Ausweichsprungs in Sekunden (0 = keiner) und seine Richtung (waagerecht).
+var _dash_left: float = 0.0
+var _dash_direction: Vector3 = Vector3.ZERO
+## Sekunden, die eine Ladung zum Nachladen braucht, und Rest für die gerade ladende.
+var _dash_cooldown: float = 0.0
+var _dash_recharge_left: float = 0.0
+## Zweite Staffel, je Exemplar in der Reihenfolge von Game.upgrades.copies("revive"):
+## { "level": int (Rarität), "waves_left": int (geschaffte Wellen bis zur Rückkehr, 0 = bereit) }.
+var _revive_slots: Array[Dictionary] = []
 
 var _camera: Camera3D
 var _view_model: Node3D
@@ -122,6 +166,7 @@ func _ready() -> void:
 	Events.upgrade_chosen.connect(_on_upgrade_chosen)
 	Events.build_changed.connect(refresh_stats)
 	Events.weapon_fired.connect(_on_weapon_fired)
+	Events.wave_cleared.connect(_on_wave_cleared)
 	_prev_position = global_position
 	_cur_position = global_position
 	refresh_stats()
@@ -151,6 +196,8 @@ func _process(delta: float) -> void:
 			_jump_buffer_left = Balance.PLAYER_JUMP_BUFFER_TIME
 		if Input.is_action_just_pressed("interact"):
 			_interact_queued = true
+		if Input.is_action_just_pressed("dash"):
+			try_dash()
 	_update_feedback(delta)
 	_apply_camera_transform()
 
@@ -158,6 +205,8 @@ func _process(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	_prev_position = global_position
 	_invulnerable_left = maxf(0.0, _invulnerable_left - delta)
+	_tick_shield(delta)
+	_tick_dash_recharge(delta)
 	var controllable: bool = _can_control()
 	var was_on_floor: bool = is_on_floor()
 	if was_on_floor:
@@ -184,8 +233,21 @@ func _physics_process(delta: float) -> void:
 	var step: float = Balance.PLAYER_ACCELERATION * delta
 	if not was_on_floor:
 		step *= Balance.PLAYER_AIR_CONTROL
-	velocity.x = move_toward(velocity.x, direction.x * speed, step)
-	velocity.z = move_toward(velocity.z, direction.z * speed, step)
+	var dashing: bool = _dash_left > 0.0
+	if dashing:
+		# Ausweichsprung: festes Tempo in die gemerkte Richtung, Schwerkraft und Kollision wie sonst.
+		# Endet der Sprung mitten im Schritt, zählt der Rest des Schritts mit dem normalen Tempo.
+		var portion: float = clampf(_dash_left / delta, 0.0, 1.0)
+		_dash_left -= delta
+		if _dash_left < 0.0001:
+			_dash_left = 0.0
+		var dash_speed: float = lerpf(minf(speed, Balance.DASH_SPEED), Balance.DASH_SPEED, portion)
+		direction = _dash_direction
+		velocity.x = direction.x * dash_speed
+		velocity.z = direction.z * dash_speed
+	else:
+		velocity.x = move_toward(velocity.x, direction.x * speed, step)
+		velocity.z = move_toward(velocity.z, direction.z * speed, step)
 
 	var wish: Vector3 = Vector3(velocity.x, 0.0, velocity.z)
 	var fall_speed: float = -velocity.y
@@ -194,6 +256,11 @@ func _physics_process(delta: float) -> void:
 	var stepped: bool = false
 	if was_on_floor and direction != Vector3.ZERO and is_on_wall():
 		stepped = _try_step_up(wish, delta)
+	if dashing and _dash_left <= 0.0:
+		# Ende des Sprungs: Der Schwung fällt auf das normale Tempo, sonst rutscht der Spieler weit nach.
+		var flat: Vector2 = Vector2(velocity.x, velocity.z).limit_length(speed)
+		velocity.x = flat.x
+		velocity.z = flat.y
 	if stepped or (was_on_floor and is_on_floor()):
 		# Stufen (hoch wie runter) versetzen den Körper ruckartig: die Kamera gleitet hinterher.
 		var rise: float = global_position.y - height_before
@@ -206,24 +273,39 @@ func _physics_process(delta: float) -> void:
 	_update_interaction()
 
 
-## Zieht Leben ab (Zombie-Schlag). Wirkt nicht während der Unverwundbarkeit nach einem Treffer
-## und nicht nach dem Tod. Sendet player_damaged und player_health_changed, bei 0 Leben
-## genau einmal player_died.
+## Zieht Leben ab (Zombie-Schlag). Wirkt nicht während der Unverwundbarkeit nach einem Treffer,
+## nicht während eines Ausweichsprungs und nicht nach dem Tod. Mit Sicherheitsglas trifft der
+## Schaden zuerst das Schild, nur der Rest das Leben. Jeder Schaden (auch ein ganz abgefangener)
+## stellt die Wartezeit des Schilds neu. Sendet player_damaged mit dem vollen Schaden, bei
+## geändertem Schild player_shield_changed, dann player_health_changed, bei 0 Leben genau einmal
+## player_died. Ist bei 0 Leben eine Ladung der Zweiten Staffel bereit, stirbt der Spieler nicht:
+## player_health_changed meldet dann schon das neue Leben, danach kommen revive_charges_changed
+## und player_revived.
 func take_damage(amount: float) -> void:
-	if is_dead or amount <= 0.0 or _invulnerable_left > 0.0:
+	if is_dead or amount <= 0.0 or _invulnerable_left > 0.0 or is_dashing():
 		return
 	_invulnerable_left = Balance.PLAYER_HIT_INVULNERABILITY
-	hp = maxf(0.0, hp - amount)
+	var absorbed: float = minf(shield, amount)
+	_shield_delay_left = Balance.SHIELD_RECHARGE_DELAY
+	hp = maxf(0.0, hp - (amount - absorbed))
 	_trauma = minf(1.0, _trauma + 0.4 + amount / 100.0)
 	_roll_sign = -_roll_sign
 	_roll_punch = HIT_ROLL_PUNCH * _roll_sign
 	Events.player_damaged.emit(amount)
+	if absorbed > 0.0:
+		_set_shield(shield - absorbed, max_shield)
+	var revived: bool = hp <= 0.0 and _use_revive_charge()
 	Events.player_health_changed.emit(hp, max_hp)
-	if hp <= 0.0 and not is_dead:
+	if revived:
+		_publish_revive()
+		Events.player_revived.emit()
+		_revive_shockwave()
+	elif hp <= 0.0 and not is_dead:
 		_die()
 
 
 ## Heilt bis höchstens max_hp. Sendet player_health_changed. Wirkt nicht nach dem Tod.
+## Das Schild füllt sich dadurch nie.
 func heal(amount: float) -> void:
 	if is_dead or amount <= 0.0:
 		return
@@ -231,8 +313,11 @@ func heal(amount: float) -> void:
 	Events.player_health_changed.emit(hp, max_hp)
 
 
-## Liest Maximal-Leben und Tempo neu aus Game.upgrades. Steigt das Maximal-Leben, heilt der
-## Zuwachs sofort. Sendet player_health_changed.
+## Liest Maximal-Leben, Tempo, Schild, Ausweichsprünge und die Ladungen der Zweiten Staffel neu
+## aus Game.upgrades. Steigt das Maximal-Leben, heilt der Zuwachs sofort. Ein größeres Schild,
+## zusätzliche Sprünge und neue Ladungen der Zweiten Staffel kommen dagegen leer dazu und laden
+## erst nach, kleinere Höchstwerte kappen den Stand. Sendet player_health_changed, bei Änderung
+## auch player_shield_changed, dash_charges_changed und revive_charges_changed.
 func refresh_stats() -> void:
 	var new_max: float = Balance.PLAYER_MAX_HP + Game.upgrades.bonus_max_hp()
 	if new_max > max_hp and not is_dead:
@@ -241,6 +326,50 @@ func refresh_stats() -> void:
 	hp = minf(hp, max_hp)
 	_speed_multiplier = Game.upgrades.speed_multiplier()
 	Events.player_health_changed.emit(hp, max_hp)
+	var new_max_shield: float = _read_max_shield()
+	_set_shield(minf(shield, new_max_shield), new_max_shield)
+	var new_max_charges: int = _read_max_dash_charges()
+	_dash_cooldown = Game.upgrades.value("dash", "cooldown")
+	# Eine kürzere Abklingzeit gilt auch für die Ladung, die gerade lädt.
+	_dash_recharge_left = minf(_dash_recharge_left, _dash_cooldown)
+	_set_dash_charges(mini(dash_charges, new_max_charges), new_max_charges)
+	_sync_revive(false)
+
+
+## Macht einen Ausweichsprung (wie die Taste Q): in die Richtung der Bewegungstasten, ohne
+## Eingabe geradeaus in Blickrichtung. Kostet eine Ladung. Gibt false zurück (und tut nichts)
+## ohne Notausgang, ohne Ladung, während eines Sprungs, außerhalb des States PLAYING oder nach
+## dem Tod. Sendet player_dashed und dash_charges_changed.
+func try_dash() -> bool:
+	if not _can_control() or max_dash_charges <= 0 or dash_charges <= 0 or is_dashing():
+		return false
+	var input: Vector2 = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var direction: Vector3 = global_transform.basis * Vector3(input.x, 0.0, input.y)
+	direction.y = 0.0
+	if direction.length_squared() <= 0.0001:
+		direction = -global_transform.basis.z
+		direction.y = 0.0
+	if direction.length_squared() <= 0.0001:
+		return false
+	_dash_direction = direction.normalized()
+	_dash_left = Balance.DASH_TIME
+	_set_dash_charges(dash_charges - 1, max_dash_charges)
+	Events.player_dashed.emit()
+	return true
+
+
+## Läuft gerade ein Ausweichsprung? (So lange nimmt der Spieler keinen Schaden.)
+func is_dashing() -> bool:
+	return _dash_left > 0.0
+
+
+## Zweite Staffel: je Ladung die Zahl der Wellen, die noch geschafft werden müssen, bis sie
+## wieder bereit ist (0 = bereit), in der Reihenfolge der Exemplare. Leer ohne Exemplar.
+func get_revive_waves_left() -> Array[int]:
+	var result: Array[int] = []
+	for slot: Dictionary in _revive_slots:
+		result.append(int(slot["waves_left"]))
+	return result
 
 
 ## Weltposition der Augen (Start von Schuss- und Blick-Strahl).
@@ -313,10 +442,208 @@ func _on_run_started() -> void:
 	_focus = null
 	Events.interact_prompt_changed.emit("")
 	Events.player_health_changed.emit(hp, max_hp)
+	# Neuer Lauf: volles Schild und alle Ausweichsprünge.
+	_shield_delay_left = 0.0
+	_dash_left = 0.0
+	_dash_recharge_left = 0.0
+	_dash_cooldown = Game.upgrades.value("dash", "cooldown")
+	var full_shield: float = _read_max_shield()
+	_set_shield(full_shield, full_shield)
+	var full_charges: int = _read_max_dash_charges()
+	_set_dash_charges(full_charges, full_charges)
+	# Und mit allen Ladungen der Zweiten Staffel.
+	_sync_revive(true)
 
 
 func _on_upgrade_chosen(_upgrade_id: String, _new_level: int) -> void:
 	refresh_stats()
+
+
+## Höchstwert des Schilds aus allen Exemplaren des Sicherheitsglases (0 ohne).
+func _read_max_shield() -> float:
+	return maxf(0.0, Game.upgrades.value("shield", "amount"))
+
+
+## Zahl der Ausweichsprünge: einer je Exemplar des Notausgangs (0 ohne).
+func _read_max_dash_charges() -> int:
+	if Game.upgrades.get_level("dash") <= 0:
+		return 0
+	return maxi(0, int(Game.upgrades.value("dash", "charges")))
+
+
+## Setzt Schild und Höchstwert und sendet player_shield_changed, wenn sich einer der Werte ändert.
+func _set_shield(new_shield: float, new_max: float) -> void:
+	new_max = maxf(0.0, new_max)
+	new_shield = clampf(new_shield, 0.0, new_max)
+	if new_shield == shield and new_max == max_shield:
+		return
+	shield = new_shield
+	max_shield = new_max
+	Events.player_shield_changed.emit(shield, max_shield)
+
+
+## Setzt Ladungen und Höchstzahl der Ausweichsprünge, hält die Nachladezeit passend und sendet
+## dash_charges_changed, wenn sich einer der Werte ändert.
+func _set_dash_charges(new_charges: int, new_max: int) -> void:
+	new_max = maxi(0, new_max)
+	new_charges = clampi(new_charges, 0, new_max)
+	var changed: bool = new_charges != dash_charges or new_max != max_dash_charges
+	dash_charges = new_charges
+	max_dash_charges = new_max
+	if dash_charges >= max_dash_charges:
+		_dash_recharge_left = 0.0
+	elif _dash_recharge_left <= 0.0:
+		_dash_recharge_left = _dash_cooldown
+	if changed:
+		Events.dash_charges_changed.emit(dash_charges, max_dash_charges)
+
+
+## Schild: Die Wartezeit nach einem Schaden läuft ab, danach lädt es bis zum Höchstwert.
+func _tick_shield(delta: float) -> void:
+	if _shield_delay_left > 0.0:
+		_shield_delay_left = maxf(0.0, _shield_delay_left - delta)
+		return
+	if is_dead or shield >= max_shield:
+		return
+	var charged: float = shield + Balance.SHIELD_RECHARGE_RATE * delta
+	# Knapp unter dem Höchstwert gilt als voll (Rundungsreste), das letzte Signal meldet genau ihn.
+	if charged >= max_shield - 0.0001:
+		charged = max_shield
+	_set_shield(charged, max_shield)
+
+
+## Ausweichsprünge laden nacheinander nach: immer nur eine Ladung zur selben Zeit.
+func _tick_dash_recharge(delta: float) -> void:
+	if is_dead or dash_charges >= max_dash_charges:
+		return
+	_dash_recharge_left -= delta
+	if _dash_recharge_left > 0.0:
+		return
+	_dash_recharge_left = 0.0
+	_set_dash_charges(dash_charges + 1, max_dash_charges)
+
+
+# --- Zweite Staffel ---
+
+## Wellen, nach denen eine Ladung dieser Rarität wiederkommt (mindestens 1).
+func _revive_waves(level: int) -> int:
+	return maxi(1, roundi(UpgradeDefs.value("revive", "waves", level)))
+
+
+## Gleicht die Ladungen mit den Exemplaren der Zweiten Staffel ab (eine je Exemplar, mit dessen
+## Rarität). full = true (neuer Lauf): alle Ladungen sind bereit. Sonst behält jede Ladung ihren
+## Stand: erst die mit gleicher Rarität, dann wandern übrige Ladungen auf geänderte Raritäten
+## (kombinierte Gegenstände, ihre Wartezeit höchstens die neue). Was dann noch fehlt, ist neu und
+## kommt leer: Es wartet seine volle Zahl an Wellen (sonst wäre Ein- und Ausräumen im Rucksack
+## eine Gratis-Ladung).
+func _sync_revive(full: bool) -> void:
+	var wanted: Array[int] = []
+	for entry: Variant in Game.upgrades.copies("revive"):
+		if int(entry) > 0:
+			wanted.append(clampi(int(entry), 1, Balance.UPGRADE_MAX_LEVEL))
+	var slots: Array[Dictionary] = []
+	if full:
+		for level: int in wanted:
+			slots.append({"level": level, "waves_left": 0})
+	else:
+		var old: Array[Dictionary] = _revive_slots.duplicate()
+		# Erst die Ladungen mit gleicher Rarität zuordnen (null = noch offen).
+		var matched: Array = []
+		for level: int in wanted:
+			var found: Variant = null
+			for i: int in old.size():
+				if int(old[i]["level"]) == level:
+					found = old[i]
+					old.remove_at(i)
+					break
+			matched.append(found)
+		for i: int in wanted.size():
+			var waves: int = _revive_waves(wanted[i])
+			if matched[i] != null:
+				slots.append(matched[i] as Dictionary)
+			elif not old.is_empty():
+				var moved: Dictionary = old.pop_front()
+				slots.append({"level": wanted[i], "waves_left": mini(int(moved["waves_left"]), waves)})
+			else:
+				slots.append({"level": wanted[i], "waves_left": waves})
+	_revive_slots = slots
+	_publish_revive()
+
+
+## Zählt die bereiten Ladungen und sendet revive_charges_changed, wenn sich etwas geändert hat.
+func _publish_revive() -> void:
+	var available: int = 0
+	for slot: Dictionary in _revive_slots:
+		if int(slot["waves_left"]) <= 0:
+			available += 1
+	var total: int = _revive_slots.size()
+	if available == revive_charges and total == max_revive_charges:
+		return
+	revive_charges = available
+	max_revive_charges = total
+	Events.revive_charges_changed.emit(revive_charges, max_revive_charges)
+
+
+## Verbraucht bei einem tödlichen Treffer eine bereite Ladung: Leben auf den Anteil
+## Balance.REVIVE_HP_SHARE, unverwundbar für REVIVE_INVULNERABILITY Sekunden. Von mehreren
+## bereiten geht die Ladung, die am schnellsten wiederkommt. Gibt false zurück (und tut nichts),
+## wenn keine Ladung bereit ist. Die Signale sendet take_damage.
+func _use_revive_charge() -> bool:
+	var best: int = -1
+	var best_waves: int = 0
+	for i: int in _revive_slots.size():
+		if int(_revive_slots[i]["waves_left"]) > 0:
+			continue
+		var waves: int = _revive_waves(int(_revive_slots[i]["level"]))
+		if best < 0 or waves < best_waves:
+			best = i
+			best_waves = waves
+	if best < 0:
+		return false
+	_revive_slots[best]["waves_left"] = best_waves
+	hp = maxf(1.0, max_hp * Balance.REVIVE_HP_SHARE)
+	_invulnerable_left = Balance.REVIVE_INVULNERABILITY
+	return true
+
+
+## Druckwelle der Zweiten Staffel: stößt alle lebenden Zombies im Umkreis
+## Balance.REVIVE_SHOCKWAVE_RADIUS (Füße zu Füßen) vom Spieler weg. Schaden macht sie nur, wenn
+## Balance.REVIVE_SHOCKWAVE_DAMAGE über 0 liegt (source "shockwave").
+func _revive_shockwave() -> void:
+	if not is_inside_tree():
+		return
+	var center: Vector3 = global_position
+	Fx.shockwave(Fx.root_of(self), center, Balance.REVIVE_SHOCKWAVE_RADIUS)
+	# Die Schleife läuft ohne Typ: Ein Zombie kann mittendrin verschwinden.
+	for entry: Variant in get_tree().get_nodes_in_group("zombies"):
+		if not is_instance_valid(entry) or not entry is Node3D:
+			continue
+		var zombie: Node3D = entry
+		if bool(zombie.get("is_dead")) or zombie.is_queued_for_deletion():
+			continue
+		var offset: Vector3 = zombie.global_position - center
+		if offset.length() > Balance.REVIVE_SHOCKWAVE_RADIUS:
+			continue
+		var push: Vector3 = Vector3(offset.x, 0.0, offset.z)
+		if push.length_squared() < 0.0001:
+			push = -global_basis.z
+			push.y = 0.0
+		if push.length_squared() < 0.0001:
+			push = Vector3.FORWARD
+		if Balance.REVIVE_SHOCKWAVE_DAMAGE > 0.0 and zombie.has_method("take_damage"):
+			zombie.call("take_damage", Balance.REVIVE_SHOCKWAVE_DAMAGE, {"source": "shockwave", "hit_position": zombie.global_position})
+		if zombie.has_method("apply_knockback"):
+			zombie.call("apply_knockback", push.normalized() * Balance.REVIVE_SHOCKWAVE_KNOCKBACK)
+
+
+## Eine Welle ist geschafft: Verbrauchte Ladungen der Zweiten Staffel rücken eine Welle näher.
+func _on_wave_cleared(_wave: int) -> void:
+	if is_dead:
+		return
+	for slot: Dictionary in _revive_slots:
+		if int(slot["waves_left"]) > 0:
+			slot["waves_left"] = int(slot["waves_left"]) - 1
+	_publish_revive()
 
 
 func _on_weapon_fired(weapon_id: String) -> void:
@@ -335,6 +662,7 @@ func _die() -> void:
 	is_dead = true
 	velocity = Vector3.ZERO
 	_is_sprinting = false
+	_dash_left = 0.0
 	if _prompt != "":
 		_prompt = ""
 		Events.interact_prompt_changed.emit("")
@@ -409,9 +737,14 @@ func _update_feedback(delta: float) -> void:
 	# Sichtfeld weitet sich beim Sprinten.
 	# Das Grund-Sichtfeld kommt aus den Einstellungen (Standard Balance.PLAYER_FOV).
 	var fov_target: float = Settings.fov
+	var fov_rate: float = FOV_LERP_RATE
 	if _is_sprinting and flat_speed > Balance.PLAYER_WALK_SPEED * 0.9:
 		fov_target += SPRINT_FOV_BOOST
-	_camera.fov = lerpf(_camera.fov, fov_target, 1.0 - exp(-FOV_LERP_RATE * dt))
+	if is_dashing():
+		# Ausweichsprung: kurzer, schneller Ruck nach außen. Danach kehrt es im normalen Tempo zurück.
+		fov_target += DASH_FOV_BOOST
+		fov_rate = DASH_FOV_LERP_RATE
+	_camera.fov = lerpf(_camera.fov, fov_target, 1.0 - exp(-fov_rate * dt))
 
 
 ## Setzt die Kamera aus Blickwinkel und allen Feedback-Anteilen zusammen.

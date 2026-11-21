@@ -17,7 +17,12 @@ extends RefCounted
 ## eingeräumten Waffen höchstens Balance.PLAYER_HANDS Hände brauchen, sonst passt die Waffe nicht.
 ##
 ## Sterne: Gegenstände mit Sternfeldern (ItemDefs.stars) wirken nur für die Waffen, die eines
-## ihrer Sternfelder belegen. Ohne Waffe auf einem Stern wirken sie nicht.
+## ihrer Sternfelder belegen. Ohne Waffe auf einem Stern wirken sie nicht. Die Sterne der
+## Kamera-Gegenstände zielen genauso auf Kameras (Abschnitt 22.1), der Stern der Wiederholung auf
+## einen Upgrade-Gegenstand oder eine Kamera.
+##
+## Kameras: Jede eingeräumte Kamera ist ein eigenes Exemplar (cameras()). Sie wirken nicht über
+## UpgradeState, sondern über Game.cameras.
 ##
 ## Jedes wirkende Exemplar zählt einzeln: Mehrere gleiche Gegenstände addieren ihre Wirkung
 ## (wie genau, steht je Wert in UpgradeDefs.combined_value).
@@ -380,15 +385,21 @@ func star_cells_of(uid: int) -> Array[Vector2i]:
 	return stars_at(str(entry["id"]), entry["pos"] as Vector2i, int(entry["rot"]))
 
 
-## uids der eingeräumten Waffen, die auf einem Sternfeld von uid liegen (ohne Doppelte).
+## uids der eingeräumten Gegenstände, auf die die Sterne von uid wirken (ohne Doppelte): bei
+## Waffen-Sternen die Waffen auf den Sternfeldern, bei Kamera-Sternen die Kameras, bei der
+## Wiederholung die Upgrade-Gegenstände und Kameras.
 func star_targets(uid: int) -> Array[int]:
 	var result: Array[int] = []
+	var index: int = _index_of(uid)
+	if index < 0:
+		return result
+	var owner_id: String = str(_items[index]["id"])
 	var taken: Dictionary = _occupancy()
 	for cell: Vector2i in star_cells_of(uid):
 		var other: int = int(taken.get(cell, -1))
 		if other == -1 or other == uid or result.has(other):
 			continue
-		if ItemDefs.is_weapon(str(_items[_index_of(other)]["id"])):
+		if ItemDefs.star_hits(owner_id, str(_items[_index_of(other)]["id"])):
 			result.append(other)
 	return result
 
@@ -399,19 +410,43 @@ func is_star_lit(uid: int, cell: Vector2i) -> bool:
 	if not star_cells_of(uid).has(cell):
 		return false
 	var other: int = occupant(cell)
-	return other != -1 and other != uid and ItemDefs.is_weapon(str(_items[_index_of(other)]["id"]))
+	if other == -1 or other == uid:
+		return false
+	return ItemDefs.star_hits(str(_items[_index_of(uid)]["id"]), str(_items[_index_of(other)]["id"]))
 
 
-## uids der eingeräumten Stern-Gegenstände, die auf diese Waffe wirken.
-func mods_of(weapon_uid: int) -> Array[int]:
+## uids der eingeräumten Stern-Gegenstände, die auf diesen Gegenstand wirken: bei einer Waffe
+## ihre Kugel-Effekte und Verstärker, bei einem Upgrade-Gegenstand die Wiederholungen, bei einer
+## Kamera ihre Kamera-Gegenstände und die Wiederholungen.
+func mods_of(target_uid: int) -> Array[int]:
 	var result: Array[int] = []
 	for entry: Dictionary in _items:
-		if bool(entry["placed"]) and ItemDefs.has_stars(str(entry["id"])) and star_targets(int(entry["uid"])).has(weapon_uid):
+		if bool(entry["placed"]) and ItemDefs.has_stars(str(entry["id"])) and star_targets(int(entry["uid"])).has(target_uid):
 			result.append(int(entry["uid"]))
 	return result
 
 
-## Wirkt dieser Gegenstand gerade? Eingeräumt, und wenn er Sterne hat, liegt eine Waffe darauf.
+## Raritäten, mit denen ein eingeräumter Upgrade-Gegenstand oder eine eingeräumte Kamera zählt:
+## die eigene und je Wiederholung, deren Stern darauf liegt, noch einmal (höchstens in der Rarität
+## der Wiederholung). Leer für alles andere.
+func copy_levels(uid: int) -> Array[int]:
+	var index: int = _index_of(uid)
+	var levels: Array[int] = []
+	if index < 0 or not bool(_items[index]["placed"]):
+		return levels
+	if not ItemDefs.is_upgrade(str(_items[index]["id"])) and not ItemDefs.is_camera(str(_items[index]["id"])):
+		return levels
+	var level: int = int(_items[index]["level"])
+	levels.append(level)
+	for mod_uid: int in mods_of(uid):
+		var mod: Dictionary = _items[_index_of(mod_uid)]
+		if ItemDefs.is_replay(str(mod["id"])):
+			levels.append(mini(level, int(mod["level"])))
+	return levels
+
+
+## Wirkt dieser Gegenstand gerade? Eingeräumt, und wenn er Sterne hat, liegt etwas darauf, worauf
+## sie zielen (Waffe, Kamera oder bei der Wiederholung ein Upgrade-Gegenstand oder eine Kamera).
 func is_active(uid: int) -> bool:
 	var index: int = _index_of(uid)
 	if index < 0 or not bool(_items[index]["placed"]):
@@ -455,7 +490,7 @@ func loadout() -> Array[Dictionary]:
 			if ItemDefs.is_upgrade(mod_id):
 				if not copies.has(mod_id):
 					copies[mod_id] = []
-				(copies[mod_id] as Array).append(int(mod["level"]))
+				(copies[mod_id] as Array).append_array(copy_levels(mod_uid))
 			elif ItemDefs.stat(mod_id) == "damage":
 				damage += ItemDefs.stat_amount(mod_id, int(mod["level"]))
 			elif ItemDefs.stat(mod_id) == "reload":
@@ -465,6 +500,42 @@ func loadout() -> Array[Dictionary]:
 			"hands": ItemDefs.hands(str(weapon["id"])), "copies": copies,
 			"damage": damage, "reload": minf(reload, Balance.RELOAD_BONUS_MAX),
 		})
+	return result
+
+
+## Die Kameras im Rucksack (Abschnitt 22.1): je Exemplar ein Eintrag, in der Reihenfolge des
+## Erwerbs. Eine Wiederholung auf einer Kamera ergibt ein zweites Exemplar, höchstens in der
+## Rarität der Wiederholung. Es hat dieselben Kamera-Gegenstände wie das erste. Eine Wiederholung
+## auf einem Kamera-Gegenstand zählt ihn doppelt (copy_levels). Je Eintrag:
+##   { "key": String    eindeutig je Exemplar: "<uid>:<nummer>", das erste Exemplar hat ":0"
+##     "uid": int       uid der Kamera im Rucksack
+##     "copy": int      0 = die Kamera selbst, ab 1 die Exemplare aus Wiederholungen
+##     "id": String     Kameratyp (CameraDefs)
+##     "level": int     Rarität dieses Exemplars
+##     "mods": Dictionary  Kamera-Gegenstände, deren Sterne auf der Kamera liegen:
+##                         mod_id -> Array[int] mit der Rarität jedes Exemplars }
+## Die Sendeleitung (ohne Sterne) steht nicht hier, sondern in global_copies().
+func cameras() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for entry: Dictionary in _items:
+		var id: String = str(entry["id"])
+		if not bool(entry["placed"]) or not ItemDefs.is_camera(id):
+			continue
+		var uid: int = int(entry["uid"])
+		var mods: Dictionary = {}
+		for mod_uid: int in mods_of(uid):
+			var mod_id: String = str(_items[_index_of(mod_uid)]["id"])
+			if not ItemDefs.is_camera_mod(mod_id):
+				continue
+			if not mods.has(mod_id):
+				mods[mod_id] = []
+			(mods[mod_id] as Array).append_array(copy_levels(mod_uid))
+		var levels: Array[int] = copy_levels(uid)
+		for copy: int in levels.size():
+			result.append({
+				"key": "%d:%d" % [uid, copy], "uid": uid, "copy": copy, "id": id,
+				"level": levels[copy], "mods": mods.duplicate(true),
+			})
 	return result
 
 
@@ -478,12 +549,13 @@ func global_copies() -> Dictionary:
 			continue
 		if not copies.has(id):
 			copies[id] = []
-		(copies[id] as Array).append(int(entry["level"]))
+		(copies[id] as Array).append_array(copy_levels(int(entry["uid"])))
 	return copies
 
 
 ## Beste wirkende Rarität je Upgrade: upgrade_id -> 1 bis 5, in der Reihenfolge des Erwerbs.
-## Für Übersichten (HUD, Game Over) und die Kisten. Stern-Gegenstände ohne Waffe fehlen.
+## Für Übersichten (HUD, Game Over) und die Kisten. Stern-Gegenstände ohne Ziel fehlen. Kameras
+## sind keine Upgrades und stehen nicht hier (siehe cameras()).
 func upgrade_levels() -> Dictionary:
 	var levels: Dictionary = {}
 	for entry: Dictionary in _items:

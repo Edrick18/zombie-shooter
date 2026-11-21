@@ -1,0 +1,69 @@
+Geräusche des Spiels
+====================
+
+Alle WAV-Dateien in diesem Ordner sind berechnet (kein fremdes Material). Sie entstehen mit
+
+    python tools/make_sounds.py
+
+im Projektordner. Das Skript schreibt jede Datei neu (16 Bit, Mono, 44100 Hz, Spitzenpegel
+-3 dBFS) und druckt eine Tabelle mit Länge und Pegel. Es sind 61 Dateien.
+
+Eigene Geräusche einsetzen
+--------------------------
+
+Jede Datei lässt sich durch eine echte Aufnahme ersetzen: einfach eine WAV-Datei mit demselben
+Namen hier ablegen (z. B. shot_pistol.wav). Danach Godot einmal die Dateien einlesen lassen
+(Editor öffnen oder: Godot --headless --import --path <Projekt>) und die EXE neu bauen.
+Achtung: make_sounds.py überschreibt die Dateien wieder. Wer eigene Aufnahmen behalten will,
+ruft das Skript danach nicht mehr auf (oder nimmt das Geräusch dort aus der Liste SOUNDS).
+
+Fehlt eine Datei, bleibt dieses Geräusch im Spiel einfach stumm.
+
+Welche Datei wann erklingt, steht in scripts/game/audio/sfx.gd. Kurz:
+
+    shot_<waffe>.wav        Schuss je Waffe (pistol, revolver, smg, sawed_off, shotgun, rifle,
+                            sniper, minigun, rocket_launcher, burst_pistol, nail_gun,
+                            machine_pistol, crossbow, grenade_launcher, flamethrower, beam,
+                            tesla, lmg, auto_shotgun)
+    reload_start / _done    Nachladen beginnt / ist fertig
+    hit, headshot           Kugel trifft Zombie / Kill per Kopfschuss
+    zombie_death            Zombie stirbt
+    zombie_groan_1 bis 3    Stöhnen der Zombies in der Nähe
+    elite_roar              ein Elite-Zombie erscheint
+    player_hurt             der Spieler nimmt Schaden
+    shield_hit / _recharge  Treffer aufs Schild / Schild lädt wieder
+    dash                    Ausweichsprung
+    chest_drop, chest_open  Kiste fällt / Kiste wird geöffnet
+    card_chosen             Karte aus der Kiste gewählt
+    upgrade, synergy        Upgrade gestiegen / Verbindung freigeschaltet
+    backpack_open / _close  Rucksack auf / zu
+    item_sold, purchase     Gegenstand verkauft / Tür bezahlt
+    wave_start              Fanfare zum Wellenbeginn
+    wave_cleared            Welle geschafft
+    countdown_tick          die letzten drei Sekunden vor der Welle
+    game_over               Game Over
+    ui_hover, ui_click      Knöpfe im Menü
+    explosion, lightning    Explosion / Blitz
+    drone_shot              Schuss der Kameradrohne
+    cam_tele                Schuss der Tele-Kamera
+    cam_flash               Blitz der Blitzlicht-Kamera
+    cam_slow                Schuss der Zeitlupen-Kamera
+    cam_director            die Regie-Kamera markiert einen Zombie
+    mine_placed             die Requisitenbombe legt eine Mine
+    mine_triggered          eine Mine wird ausgelöst (Warnton vor der Explosion)
+    player_revived          die Zweite Staffel fängt einen tödlichen Treffer ab
+    pack_unlocked           ein Paket wird im Programm freigeschaltet
+    bank_coins              Gutschrift aufs Konto am Ende eines Laufs
+    ricochet                ein Querschläger trifft einen zweiten Zombie
+    thorns                  die Dornen treffen einen Zombie
+
+Flammenwerfer und Strahl (Dauerfeuer)
+-------------------------------------
+
+shot_flamethrower.wav und shot_beam.wav sind keine einzelnen Schüsse, sondern 0,4 s lange Stücke
+Fauchen bzw. Summen, die weich an- und abschwellen (halbe Sinuswelle). Im Dauerfeuer startet das
+Spiel etwa alle 0,13 bis 0,15 s ein neues Stück, die Stücke überlappen sich zu einem durchgehenden
+Klang. Wer diese Dateien ersetzt, nimmt wieder ein gleichmäßiges Stück von etwa 0,4 s, das leise
+beginnt und leise endet und in sich nichts hat, was auffällt (kein Knall, kein Ton, der steigt
+oder fällt): Sonst wiederholt sich das im Takt der Starts. Abstand und Lautstärke stehen in
+scripts/game/audio/sfx.gd (STREAM_GAP und Tabelle SOUNDS).

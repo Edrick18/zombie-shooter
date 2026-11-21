@@ -8,6 +8,7 @@ const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
 const UpgradeState := preload("res://scripts/core/upgrade_state.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const BackpackState := preload("res://scripts/core/backpack_state.gd")
+const ProgressState := preload("res://scripts/core/progress_state.gd")
 
 const KIND_UPGRADE: String = "upgrade"
 const KIND_POINTS: String = "points"
@@ -117,9 +118,12 @@ static func build_offers(rng: RandomNumberGenerator, upgrades: UpgradeState, rar
 ##
 ## Regeln:
 ## - Gegenstände mit höherer Mindest-Seltenheit fehlen in schlechteren Kisten.
-## - Was der Spieler schon in Legendär hat, wird nicht mehr angeboten (es ließe sich nicht mehr
-##   kombinieren).
-## - Der erste Eintrag ist ein Upgrade-Gegenstand, solange es noch einen gibt.
+## - Auch was der Spieler schon in Legendär hat, wird weiter angeboten: Jedes Exemplar wirkt
+##   einzeln, ein weiteres bringt also immer etwas.
+## - Freischalten (Abschnitt 22.5): Mit progress werden nur Gegenstände angeboten, die dort
+##   freigeschaltet sind (ProgressState.is_item_unlocked). Rucksack-Teile gehen immer. Ohne
+##   progress (null) gilt alles als freigeschaltet.
+## - Der erste Eintrag ist ein Upgrade-Gegenstand oder eine Kamera, solange es noch einen gibt.
 ## - Rucksack-Teil: Mit force_bag enthält die Kiste sicher eines, sonst mit der Chance
 ##   Balance.CHEST_BAG_CHANCE. Nie mehr als eines, und nur, solange es noch ins Raster passt.
 ## - recent: IDs aus der letzten Kiste. Sie kommen seltener (Gewicht mal
@@ -127,7 +131,7 @@ static func build_offers(rng: RandomNumberGenerator, upgrades: UpgradeState, rar
 ## Gezogen wird nach Gewicht ohne Zurücklegen, danach gemischt. Reicht die Auswahl nicht für 3,
 ## folgen Trostpreise.
 static func build_item_offers(rng: RandomNumberGenerator, backpack: BackpackState, rarity: int,
-		force_bag: bool = false, recent: Array[String] = []) -> Array[Dictionary]:
+		force_bag: bool = false, recent: Array[String] = [], progress: ProgressState = null) -> Array[Dictionary]:
 	var room: int = BackpackState.COLS * BackpackState.ROWS - (backpack.cell_count() if backpack != null else 0)
 	var upgrades: Array[String] = []
 	var others: Array[String] = []
@@ -139,9 +143,9 @@ static func build_item_offers(rng: RandomNumberGenerator, backpack: BackpackStat
 			if ItemDefs.cell_count(id) <= room:
 				bags.append(id)
 			continue
-		if backpack != null and backpack.highest_level(id) >= ItemDefs.MAX_RARITY:
+		if progress != null and not progress.is_item_unlocked(id):
 			continue
-		if ItemDefs.is_upgrade(id):
+		if ItemDefs.is_upgrade(id) or ItemDefs.is_camera(id):
 			upgrades.append(id)
 		else:
 			others.append(id)

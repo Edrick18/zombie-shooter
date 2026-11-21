@@ -42,6 +42,7 @@ func _run() -> void:
 	_test_confirm_keys(screen)
 	_test_choose(screen)
 	_test_mouse(screen)
+	_test_program(screen)
 	_test_open_before_tree()
 	_game.set("character_id", "")
 	screen.queue_free()
@@ -300,6 +301,58 @@ func _test_mouse(screen: CanvasLayer) -> void:
 	_check(not bool(screen.call("is_open")), "Nach dem Klick ist der Bildschirm zu.")
 	(cards[0] as Control).gui_input.emit(_click())
 	_check(_chosen.size() == 1 and _character_id() == "intern", "Ein Klick bei geschlossenem Bildschirm wählt nichts.")
+
+
+## Knopf „Programm“ mit Kontostand (Abschnitt 22.5). Ohne zugewiesenen Bildschirm meldet die Wahl
+## nur program_requested. Das Zusammenspiel mit dem Bildschirm selbst prüft test_unlock_screen.gd.
+func _test_program(screen: CanvasLayer) -> void:
+	var requests: Array[int] = [0]
+	screen.connect("program_requested", func() -> void: requests[0] += 1)
+	var progress: RefCounted = _game.get("progress") as RefCounted
+	var bank: int = int(progress.get("bank"))
+	var format_int: Callable = Callable(load("res://scripts/ui/hud.gd") as GDScript, "format_int")
+	_chosen.clear()
+	_game.set("character_id", "")
+	screen.call("open")
+	var bank_label: Label = screen.get("bank_label") as Label
+	var button: Button = screen.get("program_button") as Button
+	_check(bank_label != null and button != null, "Die Kandidatenwahl hat Kontostand und Knopf Programm.")
+	if bank_label == null or button == null:
+		return
+	_check(bank_label.text == "KONTO  %s" % str(format_int.call(bank)), "Der Kontostand kommt aus Game.progress, war: " + bank_label.text)
+	_check(button.text == "PROGRAMM", "Der Knopf heißt Programm, war: " + button.text)
+	_check(button.focus_mode == Control.FOCUS_NONE, "Der Knopf nimmt keinen Tastatur-Fokus: Enter gehört der markierten Karte.")
+	_check(str((screen.get("hint_label") as Label).text).contains("P: Programm"), "Der Bedienhinweis nennt die Taste P.")
+	# Der Knopf sitzt neben dem Kontostand in der rechten oberen Ecke und überdeckt keine Karte.
+	var button_rect: Rect2 = Rect2(button.position, button.size)
+	var bank_rect: Rect2 = Rect2(bank_label.position, bank_label.size)
+	_check(not button_rect.intersects(bank_rect) and absf(button_rect.get_center().x - bank_rect.get_center().x) < 60.0, "Kontostand und Knopf stehen beieinander.")
+	var cards_top: float = (screen.get_node("Root/Stage/Cards") as Control).position.y
+	_check(button_rect.end.y <= cards_top and bank_rect.end.y <= cards_top, "Kontostand und Knopf liegen über den Karten.")
+	var headline: Control = screen.get_node("Root/Stage/Headline") as Control
+	_check(button_rect.position.x >= headline.position.x + headline.size.x - 4.0, "Der Knopf liegt rechts neben der Überschrift.")
+	# Sperre nach dem Öffnen: Knopf und Taste P wirken nicht.
+	button.pressed.emit()
+	screen.call("_unhandled_input", _key(KEY_P))
+	_check(requests[0] == 0, "Während der Eingabesperre öffnet nichts das Programm.")
+	screen.call("_process", 1.0)
+	button.pressed.emit()
+	_check(requests[0] == 1, "Der Knopf meldet program_requested.")
+	screen.call("_unhandled_input", _key(KEY_P))
+	_check(requests[0] == 2, "Die Taste P meldet program_requested.")
+	_check(bool(screen.call("is_open")) and _chosen.is_empty() and _character_id() == "", "Das Programm zu öffnen wählt keinen Kandidaten.")
+	_check(not bool(screen.call("is_program_open")), "Ohne zugewiesenen Bildschirm ist kein Programm offen.")
+	_check(bool(screen.call("open_program")) and requests[0] == 3, "open_program meldet auch ohne Sperre.")
+	# Der Kontostand folgt bank_changed.
+	progress.call("add_bank", 2500)
+	root.get_node("Events").emit_signal("bank_changed", bank + 2500, 2500)
+	_check(bank_label.text == "KONTO  %s" % str(format_int.call(bank + 2500)), "Der Kontostand folgt bank_changed, war: " + bank_label.text)
+	progress.set("bank", bank)
+	screen.call("close")
+	_check(not bool(screen.call("open_program")) and requests[0] == 3, "Geschlossen öffnet open_program nichts.")
+	screen.call("open")
+	_check(bank_label.text == "KONTO  %s" % str(format_int.call(bank)), "Beim Öffnen steht der aktuelle Kontostand da.")
+	screen.call("close")
 
 
 ## open vor dem Einhängen in den Baum darf nicht scheitern.

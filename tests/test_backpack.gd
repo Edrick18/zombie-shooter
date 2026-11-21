@@ -11,6 +11,7 @@ const UpgradeState := preload("res://scripts/core/upgrade_state.gd")
 const ChestRoller := preload("res://scripts/core/chest_roller.gd")
 const WeaponState := preload("res://scripts/core/weapon_state.gd")
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
+const CameraDefs := preload("res://scripts/core/camera_defs.gd")
 
 const STATE_PLAYING: int = 1
 const STATE_CHOOSING: int = 2
@@ -52,6 +53,8 @@ func _run() -> void:
 	_test_stars()
 	_test_stat_boosters()
 	_test_stacking()
+	_test_new_items()
+	_test_replay()
 	_test_synergy()
 	_test_upgrade_state_derived()
 	_test_characters()
@@ -88,6 +91,7 @@ func _test_item_table() -> void:
 	var upgrades: int = 0
 	var boosters: int = 0
 	var bags: int = 0
+	var cameras: int = 0
 	for id: String in ItemDefs.ORDER:
 		_check(ItemDefs.has(id), "Gegenstand %s steht in der Tabelle." % id)
 		_check(not ItemDefs.display_name(id).is_empty(), "%s hat einen Namen." % id)
@@ -119,25 +123,40 @@ func _test_item_table() -> void:
 				upgrades += 1
 				_check(UpgradeDefs.has(id), "Upgrade-Gegenstand %s gibt es auch als Upgrade." % id)
 				_check(ItemDefs.tags(id).size() >= 1, "Upgrade-Gegenstand %s hat eine Gruppe." % id)
-				_check(ItemDefs.cell_count(id) <= 3, "Upgrade-Gegenstand %s hat höchstens 3 Felder." % id)
+				_check(ItemDefs.cell_count(id) <= 4, "Upgrade-Gegenstand %s hat höchstens 4 Felder." % id)
 				_check(ItemDefs.hands(id) == 0, "%s braucht keine Hand." % id)
 			ItemDefs.KIND_BOOSTER:
 				boosters += 1
-				_check(not ItemDefs.stat(id).is_empty() and ItemDefs.stat_amount(id, 1) > 0.0, "Verstärker %s gibt einen Wert." % id)
+				_check(ItemDefs.is_replay(id) or (not ItemDefs.stat(id).is_empty() and ItemDefs.stat_amount(id, 1) > 0.0), "Verstärker %s gibt einen Wert oder ist die Wiederholung." % id)
 			ItemDefs.KIND_BAG:
 				bags += 1
+			ItemDefs.KIND_CAMERA:
+				cameras += 1
+				_check(CameraDefs.has(id) and ItemDefs.is_camera(id), "Kamera %s steht in CameraDefs." % id)
+				_check(not ItemDefs.has_stars(id) and ItemDefs.hands(id) == 0, "Kamera %s hat keine Sterne und braucht keine Hand." % id)
+				_check(ItemDefs.has_rarity(id) and not UpgradeDefs.has(id), "Kamera %s hat eine Rarität und ist kein Upgrade." % id)
 			_:
 				_check(false, "%s hat eine unbekannte Art." % id)
-	_check(weapons == 9, "Es gibt 9 Waffen, waren %d." % weapons)
-	_check(upgrades == 10, "Es gibt 10 Upgrade-Gegenstände, waren %d." % upgrades)
-	_check(boosters == 3, "Es gibt 3 Verstärker, waren %d." % boosters)
-	_check(bags == 3, "Es gibt 3 Rucksack-Teile, waren %d." % bags)
+	_check(weapons == 19, "Es gibt 19 Waffen, waren %d." % weapons)
+	_check(upgrades == 33, "Es gibt 33 Upgrade-Gegenstände (9 ursprüngliche, 11 aus Abschnitt 19, 8 und 5 Kamera-Gegenstände aus Abschnitt 22), waren %d." % upgrades)
+	_check(cameras == 5, "Es gibt 5 Kameras, waren %d." % cameras)
+	_check(boosters == 4, "Es gibt 4 Verstärker (mit der Wiederholung), waren %d." % boosters)
+	_check(ItemDefs.ORDER.size() == 65, "Zusammen 65 Gegenstände, waren %d." % ItemDefs.ORDER.size())
+	for id: String in WeaponDefs.ORDER:
+		_check(ItemDefs.is_weapon(id), "Jede Waffe hat einen Gegenstand: %s." % id)
+	for id: String in CameraDefs.ORDER:
+		_check(ItemDefs.is_camera(id), "Jede Kamera hat einen Gegenstand: %s." % id)
+	for id: String in UpgradeDefs.ITEM_ONLY:
+		_check(ItemDefs.is_upgrade(id), "Jeder Gegenstand aus ITEM_ONLY steht in ItemDefs: %s." % id)
+	_check(bags == 4, "Es gibt 4 Rucksack-Teile, waren %d." % bags)
 	for id: String in UpgradeDefs.ORDER:
 		_check(ItemDefs.is_upgrade(id), "Jedes Upgrade hat einen Gegenstand: %s." % id)
 	# Hände.
 	_check(ItemDefs.hands("pistol") == 1 and ItemDefs.hands("revolver") == 1 and ItemDefs.hands("smg") == 1 and ItemDefs.hands("sawed_off") == 1, "Vier Einhand-Waffen.")
-	for two_handed: String in ["shotgun", "rifle", "sniper", "minigun", "rocket_launcher"]:
+	for two_handed: String in ["shotgun", "rifle", "sniper", "minigun", "rocket_launcher", "flamethrower", "beam", "tesla", "lmg", "auto_shotgun"]:
 		_check(ItemDefs.hands(two_handed) == 2, "%s braucht zwei Hände." % two_handed)
+	for one_handed: String in ["burst_pistol", "nail_gun", "machine_pistol", "crossbow", "grenade_launcher"]:
+		_check(ItemDefs.hands(one_handed) == 1, "%s braucht eine Hand." % one_handed)
 	# Sterne: Kugel-Effekte und zwei Verstärker zielen auf Waffen, alles andere wirkt für sich.
 	for mod: String in ["chain_lightning", "pierce", "burn"]:
 		_check(ItemDefs.is_weapon_mod(mod) and ItemDefs.star_target(mod) == ItemDefs.STAR_WEAPON, "%s wirkt über Sterne auf Waffen." % mod)
@@ -163,6 +182,17 @@ func _test_item_table() -> void:
 	_check(ItemDefs.description("pierce", 1).ends_with("Gilt für Waffen auf den Sternen."), "Kugel-Effekte nennen die Sterne.")
 	_check(ItemDefs.description("pistol", 1).contains("Eine Hand.") and ItemDefs.description("shotgun", 1).contains("Zwei Hände."), "Der Text einer Waffe nennt die Hände.")
 	_check(ItemDefs.kind("gibt_es_nicht") == "" and ItemDefs.cells("gibt_es_nicht").is_empty() and ItemDefs.stars("gibt_es_nicht").is_empty(), "Unbekannte Gegenstände sind harmlos.")
+	# Abschnitt 22: Kameras und neue Waffen in Text und Unterzeile.
+	_check(ItemDefs.subtitle("drone", 3) == "Selten · Kamera · 2 Felder", "Unterzeile der Kameradrohne, war: " + ItemDefs.subtitle("drone", 3))
+	_check(ItemDefs.display_name("drone") == "Kameradrohne" and ItemDefs.display_name("cam_director") == "Regie-Kamera", "Kameras nehmen ihren Namen aus CameraDefs.")
+	_check(ItemDefs.description("drone", 2) == CameraDefs.effect_text("drone", 2) and ItemDefs.description("drone", 2).contains("21"), "Der Text der Kameradrohne nennt die festen Werte der Rarität: " + ItemDefs.description("drone", 2))
+	_check(ItemDefs.color("drone") == ItemDefs.CAMERA_COLOR and ItemDefs.sell_value("cam_tele", 2) == 200, "Kameras haben eine eigene Farbe und einen Verkaufswert wie alle Gegenstände mit Rarität.")
+	_check(ItemDefs.description("cam_lens", 1).ends_with("Gilt für Kameras auf den Sternen.") and not ItemDefs.description("cam_uplink", 1).contains("Sternen"), "Kamera-Gegenstände nennen die Sterne, die Sendeleitung nicht.")
+	_check(ItemDefs.description("burst_pistol", 1).contains("Salven je Sekunde mit je 3 Schuss"), "Die Salvenpistole nennt die Salve: " + ItemDefs.description("burst_pistol", 1))
+	_check(ItemDefs.description("crossbow", 1).contains("Durchschlägt 3 weitere Zombies") and ItemDefs.description("nail_gun", 1).contains("Durchschlägt einen weiteren Zombie"), "Armbrust und Nagelpistole nennen den Durchschlag.")
+	_check(ItemDefs.description("grenade_launcher", 1).contains("Granate im Bogen") and ItemDefs.description("grenade_launcher", 1).contains("Explosion 110 im Umkreis von 3 m"), "Der Granatwerfer nennt Bogen und Explosion: " + ItemDefs.description("grenade_launcher", 1))
+	_check(ItemDefs.description("flamethrower", 1).contains("Flammen bis 7 m") and ItemDefs.description("beam", 1).contains("Dauerstrahl") and ItemDefs.description("tesla", 1).contains("Springt auf 3 weitere Zombies mit 60 %"), "Flammenwerfer, Strahl und Tesla nennen ihre Besonderheit.")
+	_check(ItemDefs.description("pistol", 1) == "Schaden 25 · 5 Schuss je Sekunde · Magazin 10 · Nachladen 1,2 s. Eine Hand.", "Der Text der Dienstpistole bleibt, wie er war: " + ItemDefs.description("pistol", 1))
 
 
 func _test_shapes() -> void:
@@ -335,6 +365,15 @@ func _test_bags() -> void:
 	_check(backpack.can_place(large, Vector2i(4, 1), 0), "Der Reisekoffer passt bis an den rechten Rand.")
 	_check(not backpack.can_place(large, Vector2i(5, 1), 0), "Über den rechten Rand hinaus passt er nicht.")
 	_check(backpack.auto_place(large) and backpack.cell_count() == 10, "auto_place findet auch für Rucksack-Teile eine Stelle.")
+	# Bauchtasche: genau ein Feld.
+	_check(ItemDefs.is_bag("bag_tiny") and ItemDefs.cell_count("bag_tiny") == 1, "Die Bauchtasche ist ein Rucksack-Teil mit einem Feld.")
+	_check(ItemDefs.display_name("bag_tiny") == "Bauchtasche" and ItemDefs.sell_value("bag_tiny") == Balance.ITEM_SELL_BAG, "Name und Verkaufswert der Bauchtasche.")
+	var tiny: int = backpack.add_item("bag_tiny")
+	var cells_before: int = backpack.cell_count()
+	_check(not backpack.can_place(tiny, Vector2i(2, 2), 0), "Die Bauchtasche passt nicht auf ein vorhandenes Feld.")
+	_check(backpack.auto_place(tiny), "Die Bauchtasche findet eine Stelle am Rand.")
+	_check(backpack.cell_count() == cells_before + 1, "Die Bauchtasche gibt genau ein Feld (%d -> %d)." % [cells_before, backpack.cell_count()])
+	_check(not backpack.has_item(tiny), "Die Bauchtasche ist danach verbraucht.")
 
 
 func _test_hands() -> void:
@@ -493,6 +532,120 @@ func _test_stacking() -> void:
 	_check(manual.copies("burn") == [2], "add_levels verlässt die Exemplar-Liste wieder.")
 
 
+func _test_new_items() -> void:
+	# Abschnitt 19: sechs Gegenstände für die Waffe (mit Sternen), fünf für den Spieler.
+	for mod: String in ["extra_shot", "poison", "crit", "big_mag", "scope", "fire_rate"]:
+		_check(ItemDefs.is_upgrade(mod) and ItemDefs.is_weapon_mod(mod) and ItemDefs.star_target(mod) == ItemDefs.STAR_WEAPON, "%s wirkt über Sterne auf Waffen." % mod)
+		_check(ItemDefs.description(mod, 1).ends_with("Gilt für Waffen auf den Sternen."), "%s nennt die Sterne im Text." % mod)
+	for plain: String in ["shield", "kill_heal", "disco_ball", "jammer", "dash"]:
+		_check(ItemDefs.is_upgrade(plain) and not ItemDefs.has_stars(plain), "%s wirkt ohne Sterne für den Spieler." % plain)
+	# Abschnitt 22.3: vier für die Waffe, vier für den Spieler.
+	for mod: String in ["frost", "opener", "punchline", "ricochet"]:
+		_check(ItemDefs.is_upgrade(mod) and ItemDefs.is_weapon_mod(mod) and not ItemDefs.is_camera_mod(mod), "%s wirkt über Sterne auf Waffen." % mod)
+		_check(ItemDefs.description(mod, 1).ends_with("Gilt für Waffen auf den Sternen."), "%s nennt die Sterne im Text." % mod)
+	for plain: String in ["thorns", "revive", "snack", "mine"]:
+		_check(ItemDefs.is_upgrade(plain) and not ItemDefs.has_stars(plain), "%s wirkt ohne Sterne für den Spieler." % plain)
+	_check(ItemDefs.stars("frost", 0) == ([Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1)] as Array[Vector2i]), "Trockeneis: drei Sterne in einer Reihe darüber.")
+	_check(ItemDefs.stars("opener", 0) == ([Vector2i(-1, 0), Vector2i(0, -1)] as Array[Vector2i]), "Eröffnungsgag: links und über dem Eckfeld.")
+	_check(ItemDefs.stars("punchline", 0) == ([Vector2i(-1, 2), Vector2i(0, 2), Vector2i(1, 2)] as Array[Vector2i]), "Schlusspointe: drei Sterne in einer Reihe darunter.")
+	_check(ItemDefs.stars("ricochet", 0) == ([Vector2i(1, -1), Vector2i(1, 1)] as Array[Vector2i]), "Querschläger: rechts oben und rechts unten.")
+	# Kein Sternmuster kommt unter Gegenständen derselben Art mit demselben Ziel zweimal vor, auch
+	# nicht gedreht (Form und Sterne zusammen).
+	var patterns: Dictionary = {}
+	for id: String in ItemDefs.ORDER:
+		if not ItemDefs.has_stars(id):
+			continue
+		var same: bool = false
+		for rot: int in 4:
+			var key: String = "%s|%s|%s|%s" % [ItemDefs.kind(id), ItemDefs.star_target(id), str(ItemDefs.cells(id, rot)), str(_sorted(ItemDefs.stars(id, rot)))]
+			if patterns.has(key) and str(patterns[key]) != id:
+				same = true
+				_check(false, "%s hat dasselbe Sternmuster wie %s." % [id, str(patterns[key])])
+		if not same:
+			for rot: int in 4:
+				patterns["%s|%s|%s|%s" % [ItemDefs.kind(id), ItemDefs.star_target(id), str(ItemDefs.cells(id, rot)), str(_sorted(ItemDefs.stars(id, rot)))]] = id
+	# Jeder hat ein eigenes Sternmuster.
+	_check(ItemDefs.stars("extra_shot", 0) == ([Vector2i(2, 0), Vector2i(3, 0)] as Array[Vector2i]), "Zugabe: zwei Sterne in einer Linie nach vorn.")
+	_check(ItemDefs.stars("poison", 0).size() == 4 and ItemDefs.stars("poison", 0).has(Vector2i(-1, -1)) and ItemDefs.stars("poison", 0).has(Vector2i(1, 1)), "Kantinenessen: die vier Ecken.")
+	_check(ItemDefs.stars("crit", 0) == ([Vector2i(-1, 0), Vector2i(1, 0)] as Array[Vector2i]), "Glücksrad: links und rechts.")
+	_check(ItemDefs.stars("big_mag", 0).size() == 4, "Überlänge: über und unter beiden Feldern.")
+	_check(ItemDefs.stars("scope", 0) == ([Vector2i(1, 0)] as Array[Vector2i]), "Teleprompter: ein Stern in der Innenecke.")
+	_check(ItemDefs.stars("fire_rate", 0).size() == 6, "Schnelldurchlauf: ein Ring aus sechs Feldern.")
+	# Die Zugabe reicht zwei Felder weit: Sie wirkt auch mit einem Feld Abstand.
+	var backpack: BackpackState = _grid(7, 5)
+	var pistol: int = backpack.add_item("pistol", 1)
+	backpack.place(pistol, Vector2i(4, 0), 0)
+	var extra: int = backpack.add_item("extra_shot", 2)
+	backpack.place(extra, Vector2i(1, 0), 0)
+	_check(backpack.star_targets(extra) == ([pistol] as Array[int]), "Die Zugabe trifft die Pistole über ein freies Feld hinweg.")
+	_check(backpack.is_star_lit(extra, Vector2i(4, 0)) and not backpack.is_star_lit(extra, Vector2i(3, 0)), "Der ferne Stern leuchtet, der nahe liegt auf einem leeren Feld.")
+	# Kantinenessen wirkt nur übereck.
+	var poison: int = backpack.add_item("poison", 1)
+	backpack.place(poison, Vector2i(6, 0), 0)
+	_check(backpack.star_targets(poison).is_empty(), "Direkt neben der Pistole wirkt das Kantinenessen nicht (nur übereck).")
+	backpack.place(poison, Vector2i(6, 1), 0)
+	_check(backpack.star_targets(poison) == ([pistol] as Array[int]), "Übereck wirkt es.")
+	var hands: Array[Dictionary] = backpack.loadout()
+	_check(hands[0]["copies"] == {"extra_shot": [2], "poison": [1]}, "Die Pistole hat Zugabe und Kantinenessen, war %s." % str(hands[0]["copies"]))
+	# Werte: mehrere Exemplare.
+	_near(UpgradeDefs.combined_value("extra_shot", "shots", [1, 3]), 2.0, "Zwei Zugaben: zwei zusätzliche Kugeln.")
+	_near(UpgradeDefs.combined_value("extra_shot", "damage_factor", [1, 3]), 0.7, "Die Zusatzkugeln nehmen den besten Schadensanteil.")
+	_near(UpgradeDefs.combined_value("crit", "chance", [5, 5, 5, 5]), 1.0, "Krit-Chance endet bei 100 %.")
+	_near(UpgradeDefs.combined_value("big_mag", "bonus", [1, 1]), 0.6, "Zwei Überlängen: 60 % mehr Magazin.")
+	_near(UpgradeDefs.combined_value("shield", "amount", [1, 5]), 80.0, "Schilde addieren sich.")
+	_near(UpgradeDefs.combined_value("dash", "cooldown", [1, 4]), 2.5, "Beim Ausweichsprung zählt die kürzeste Abklingzeit.")
+	_near(UpgradeDefs.combined_value("dash", "charges", [1, 4]), 2.0, "Jedes Exemplar gibt einen Sprung mehr.")
+	_near(UpgradeDefs.combined_value("jammer", "radius", [1, 5]), 6.0, "Beim Störsender zählt der größte Umkreis.")
+	_near(UpgradeDefs.combined_value("jammer", "damage", [1, 5]), 130.0, "Sein Schaden addiert sich.")
+
+
+func _test_replay() -> void:
+	_check(ItemDefs.is_replay("replay") and ItemDefs.is_booster("replay") and ItemDefs.star_target("replay") == ItemDefs.STAR_ITEM, "Die Wiederholung zielt mit ihrem Stern auf Gegenstände.")
+	_check(ItemDefs.min_rarity("replay") == Balance.RARITY_GOLD, "Die Wiederholung gibt es nur in Gold-Kisten.")
+	_check(ItemDefs.star_hits("replay", "luck") and not ItemDefs.star_hits("replay", "pistol") and not ItemDefs.star_hits("replay", "replay") and not ItemDefs.star_hits("replay", "spotlight"), "Sie wirkt auf Upgrade-Gegenstände, nicht auf Waffen, Verstärker oder sich selbst.")
+	_check(ItemDefs.star_hits("replay", "drone") and ItemDefs.star_hits("replay", "cam_lens"), "Sie wirkt auch auf Kameras und Kamera-Gegenstände.")
+	_check(ItemDefs.star_hits("pierce", "pistol") and not ItemDefs.star_hits("pierce", "luck"), "Waffen-Sterne wirken nur auf Waffen.")
+	var backpack: BackpackState = _grid(7, 5)
+	# Auf einen Gegenstand für den Spieler: Er zählt doppelt.
+	var luck: int = backpack.add_item("luck", 2)
+	backpack.place(luck, Vector2i(1, 0), 0)
+	var replay: int = backpack.add_item("replay", 3)
+	_check(backpack.place(replay, Vector2i(0, 0), 0), "Die Wiederholung liegt links neben dem Publikumsliebling.")
+	_check(backpack.star_targets(replay) == ([luck] as Array[int]) and backpack.is_star_lit(replay, Vector2i(1, 0)), "Ihr Stern trifft ihn.")
+	_check(backpack.is_active(replay) and backpack.mods_of(luck) == ([replay] as Array[int]), "Sie wirkt auf ihn.")
+	_check(backpack.copy_levels(luck) == ([2, 2] as Array[int]), "Der Publikumsliebling zählt zweimal.")
+	_check(backpack.global_copies() == {"luck": [2, 2]}, "global_copies nennt beide.")
+	# Das zweite Mal höchstens in der Rarität der Wiederholung.
+	var strong: int = backpack.add_item("lifesteal", 5)
+	backpack.place(strong, Vector2i(1, 2), 0)
+	var weak_replay: int = backpack.add_item("replay", 3)
+	backpack.place(weak_replay, Vector2i(0, 2), 0)
+	_check(backpack.copy_levels(strong) == ([5, 3] as Array[int]), "Legendär mit seltener Wiederholung: einmal Legendär, einmal Selten.")
+	# Zwei Wiederholungen auf demselben Gegenstand: dreifach.
+	var second: int = backpack.add_item("replay", 3)
+	backpack.place(second, Vector2i(2, 0), 2)
+	_check(backpack.star_targets(second) == ([luck] as Array[int]), "Eine zweite Wiederholung von rechts (halbe Drehung).")
+	_check(backpack.copy_levels(luck) == ([2, 2, 2] as Array[int]), "Zwei Wiederholungen: dreifach.")
+	# Auf eine Waffe wirkt sie nicht.
+	var pistol: int = backpack.add_item("pistol", 1)
+	backpack.place(pistol, Vector2i(4, 4), 0)
+	var useless: int = backpack.add_item("replay", 3)
+	backpack.place(useless, Vector2i(3, 4), 0)
+	_check(backpack.star_targets(useless).is_empty() and not backpack.is_active(useless) and not backpack.is_star_lit(useless, Vector2i(4, 4)), "Auf eine Waffe wirkt die Wiederholung nicht.")
+	# Auf einen Kugel-Effekt: Die Waffe bekommt ihn doppelt.
+	var pierce: int = backpack.add_item("pierce", 2)
+	_check(backpack.place(pierce, Vector2i(4, 3), 2), "Spezialmunition über der Pistole (Sterne nach unten).")
+	_check(backpack.star_targets(pierce) == ([pistol] as Array[int]), "Sie trifft die Pistole.")
+	backpack.store(useless)
+	_check(backpack.place(useless, Vector2i(3, 3), 0), "Die Wiederholung liegt jetzt links neben der Spezialmunition.")
+	_check(backpack.copy_levels(pierce) == ([2, 2] as Array[int]), "Die Spezialmunition zählt doppelt.")
+	_check(backpack.loadout()[0]["copies"] == {"pierce": [2, 2]}, "Die Pistole bekommt sie zweimal.")
+	_check(backpack.copy_levels(pistol).is_empty() and backpack.copy_levels(replay).is_empty() and backpack.copy_levels(9999).is_empty(), "copy_levels gilt nur für eingeräumte Upgrade-Gegenstände.")
+	# In der Ablage zählt nichts.
+	backpack.store(luck)
+	_check(backpack.copy_levels(luck).is_empty() and not backpack.is_active(replay), "In der Ablage zählt der Gegenstand nicht, die Wiederholung wirkt dann auf nichts.")
+
+
 func _test_synergy() -> void:
 	# Gewitterfront: Blitz und Durchschlag wirken beide Legendär auf dieselbe Waffe.
 	var backpack: BackpackState = _grid(7, 5)
@@ -552,7 +705,7 @@ func _test_upgrade_state_derived() -> void:
 	for id: String in UpgradeDefs.ORDER:
 		all[id] = 1
 	state.set_derived(all, [] as Array[String])
-	_check(state.owned_ids().size() == 10, "Abgeleitet gelten alle 10 Upgrades gleichzeitig.")
+	_check(state.owned_ids().size() == 9, "Abgeleitet gelten alle 9 Upgrades gleichzeitig.")
 	_check(not state.has_synergy("storm_front"), "Ohne Eintrag ist die Synergie wieder aus.")
 	# Der Nachlade-Faktor wirkt auf die Waffe.
 	var weapon: WeaponState = WeaponState.new("pistol")
@@ -606,7 +759,7 @@ func _test_item_offers() -> void:
 	rng.seed = 7
 	var backpack: BackpackState = _grid(4, 3)
 	var seen: Dictionary = {}
-	for round_index: int in 300:
+	for round_index: int in 1500:
 		var rarity: int = round_index % 3
 		var offers: Array[Dictionary] = ChestRoller.build_item_offers(rng, backpack, rarity)
 		_check(offers.size() == 3, "Eine Kiste bietet immer 3 an.")
@@ -626,7 +779,7 @@ func _test_item_offers() -> void:
 				_check(false, "%s darf in Seltenheit %d nicht vorkommen." % [id, rarity])
 			if ItemDefs.is_bag(id):
 				bag_count += 1
-			if ItemDefs.is_upgrade(id):
+			if ItemDefs.is_upgrade(id) or ItemDefs.is_camera(id):
 				upgrade_count += 1
 				if int(offer["level"]) != ChestRoller.levels_for_rarity(rarity):
 					_check(false, "Upgrade-Gegenstände haben die Stufe der Seltenheit.")
@@ -634,7 +787,7 @@ func _test_item_offers() -> void:
 				_check(false, "Verstärker und Waffen haben die Rarität der Kiste.")
 			elif ItemDefs.is_bag(id) and int(offer["level"]) != 1:
 				_check(false, "Rucksack-Teile haben keine Rarität.")
-		_check(bag_count <= 1 and upgrade_count >= 1, "Höchstens ein Rucksack-Teil, mindestens ein Upgrade-Gegenstand.")
+		_check(bag_count <= 1 and upgrade_count >= 1, "Höchstens ein Rucksack-Teil, mindestens ein Upgrade-Gegenstand oder eine Kamera.")
 	_check(seen.size() == ItemDefs.ORDER.size(), "Über viele Kisten kommt jeder Gegenstand vor, waren %d von %d." % [seen.size(), ItemDefs.ORDER.size()])
 	# Gleicher Seed, gleiches Angebot.
 	var rng_a: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -642,21 +795,25 @@ func _test_item_offers() -> void:
 	rng_a.seed = 99
 	rng_b.seed = 99
 	_check(str(ChestRoller.build_item_offers(rng_a, backpack, 1)) == str(ChestRoller.build_item_offers(rng_b, backpack, 1)), "Gleicher Seed ergibt dasselbe Angebot.")
-	# Ein Upgrade, das schon mit Stufe 5 wirkt, wird nicht mehr angeboten, owned_level stimmt.
+	# Auch was der Spieler schon in Legendär hat, wird weiter angeboten. owned_level stimmt.
 	var burn: int = backpack.add_item("burn", 5)
 	backpack.place(burn, Vector2i(0, 0), 0)
 	var luck: int = backpack.add_item("luck", 2)
 	backpack.place(luck, Vector2i(3, 2), 0)
 	var luck_seen: bool = false
+	var burn_seen: bool = false
 	for _i: int in 200:
 		for offer: Dictionary in ChestRoller.build_item_offers(rng, backpack, 0):
 			if str(offer.get("id", "")) == "burn":
-				_check(false, "Die Feuershow auf Stufe 5 wird nicht mehr angeboten.")
+				burn_seen = true
+				if int(offer["owned_level"]) != 5:
+					_check(false, "owned_level nennt Legendär für die Feuershow.")
 			if str(offer.get("id", "")) == "luck":
 				luck_seen = true
 				if int(offer["owned_level"]) != 2:
 					_check(false, "owned_level nennt die wirksame Stufe im Rucksack.")
 	_check(luck_seen, "Der Publikumsliebling wird weiter angeboten.")
+	_check(burn_seen, "Auch die legendäre Feuershow wird weiter angeboten.")
 	# Volles Raster: keine Rucksack-Teile mehr.
 	var full: BackpackState = _grid(BackpackState.COLS, BackpackState.ROWS)
 	for _i: int in 200:
@@ -751,7 +908,7 @@ func _test_game_flow() -> void:
 	_check(_chosen.is_empty(), "Meldungen kommen erst beim Schließen.")
 	_check(bool(_game.call("close_backpack")), "Der Rucksack lässt sich schließen.")
 	_check(_state() == STATE_PLAYING and not paused and _closed == 1, "Nach dem Schließen läuft das Spiel weiter.")
-	if ItemDefs.is_upgrade(str(wanted["id"])):
+	if ItemDefs.is_upgrade(str(wanted["id"])) and not ItemDefs.is_weapon_mod(str(wanted["id"])):
 		_check(_chosen == ([str(wanted["id"])] as Array[String]), "Für das neue Upgrade kommt upgrade_chosen.")
 		_check(_upgrades().get_level(str(wanted["id"])) == 2, "Silber gibt Stufe 2.")
 	_check(not bool(_game.call("close_backpack")), "Ein geschlossener Rucksack lässt sich nicht noch einmal schließen.")
@@ -896,6 +1053,13 @@ func _test_game_character() -> void:
 	_game.call("start_run", 3)
 	_near(_upgrades().bonus_max_hp(), 0.0, "Ohne Kandidat gibt es kein Zusatz-Leben.")
 	_check((_game.get("loadout") as Array).size() == 1 and int(((_game.get("loadout") as Array)[0] as Dictionary)["uid"]) == 0, "Ohne Kandidat hält der Spieler die Dienstpistole.")
+
+
+## Kopie einer Feldliste, zeilenweise sortiert (zum Vergleichen von Sternmustern).
+func _sorted(cells: Array[Vector2i]) -> Array[Vector2i]:
+	var result: Array[Vector2i] = cells.duplicate()
+	result.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y < b.y or (a.y == b.y and a.x < b.x))
+	return result
 
 
 func _near(value: float, expected: float, message: String) -> void:

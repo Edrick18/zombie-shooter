@@ -81,6 +81,7 @@ func _run() -> void:
 		await _test_damage_and_death()
 		_test_burn()
 		_test_elite_burn_factor()
+		await _test_slow_and_mark()
 		await _test_knockback_and_separation()
 		await _test_chase_and_attack()
 		await _test_no_attack_through_wall()
@@ -436,6 +437,118 @@ func _test_elite_burn_factor() -> void:
 			"Elite verliert über die Brand-Dauer genau dps * Dauer (apply_burn rechnet keinen eigenen Faktor dazu).")
 	_check(not bool(elite.get("is_dead")), "Eine Elite übersteht einen Brand der Stufe 5.")
 	_remove_all_zombies()
+	_game.set("player", _player)
+
+
+## Abschnitt 22: Verlangsamung (Trockeneis, Zeitlupen-Kamera) und Markierung (Regie-Kamera).
+func _test_slow_and_mark() -> void:
+	_game.set("player", null)
+	_clear_log()
+	# --- Verlangsamung: Regeln ---
+	var walker: CharacterBody3D = _make_zombie("walker", 1, Vector3(20.0, 0.0, 0.0))
+	_check(not bool(walker.call("is_slowed")) and is_equal_approx(float(walker.call("get_speed_factor")), 1.0), "Ohne Verlangsamung läuft der Zombie mit vollem Tempo.")
+	var base_speed: float = float(walker.get("move_speed"))
+	walker.call("apply_slow", 0.3, 2.0)
+	_check(bool(walker.call("is_slowed")), "apply_slow verlangsamt den Zombie.")
+	_check_near(float(walker.call("get_speed_factor")), 0.7, "30 % langsamer: Faktor 0,7.")
+	_check_near(float(walker.get("move_speed")), base_speed, "move_speed bleibt der Grundwert, die Verlangsamung steckt im Faktor.")
+	# Die stärkste gilt, eine schwächere ändert sie nicht.
+	walker.call("apply_slow", 0.5, 2.0)
+	_check_near(float(walker.call("get_speed_factor")), 0.5, "Eine stärkere Verlangsamung ersetzt die schwächere.")
+	walker.call("apply_slow", 0.2, 2.0)
+	_check_near(float(walker.call("get_speed_factor")), 0.5, "Eine schwächere ändert die stärkere nicht (kein Addieren).")
+	# Jeder neue Aufruf stellt die Zeit neu.
+	_step_zombie(walker, 1.5)
+	walker.call("apply_slow", 0.2, 2.0)
+	_step_zombie(walker, 1.5)
+	_check(bool(walker.call("is_slowed")), "Ein neuer Aufruf stellt die Zeit neu: nach 3 s noch langsam.")
+	_check_near(float(walker.call("get_speed_factor")), 0.5, "Solange sie läuft, gilt weiter die stärkste.")
+	_step_zombie(walker, 0.7)
+	_check(not bool(walker.call("is_slowed")) and is_equal_approx(float(walker.call("get_speed_factor")), 1.0), "2 s nach dem letzten Aufruf ist die Verlangsamung vorbei.")
+	# Danach beginnt eine neue mit ihrem eigenen Wert.
+	walker.call("apply_slow", 0.2, 2.0)
+	_check_near(float(walker.call("get_speed_factor")), 0.8, "Nach dem Ablauf zählt wieder der neue Wert.")
+	_step_zombie(walker, 2.2)
+	# Ungültige Werte und die Obergrenze.
+	walker.call("apply_slow", 0.0, 2.0)
+	walker.call("apply_slow", 0.3, 0.0)
+	walker.call("apply_slow", -0.5, 2.0)
+	_check(not bool(walker.call("is_slowed")), "apply_slow ohne Wirkung oder ohne Dauer tut nichts.")
+	walker.call("apply_slow", 5.0, 2.0)
+	_check_near(float(walker.call("get_speed_factor")), 1.0 - Balance.SLOW_MAX, "Kein Zombie wird um mehr als SLOW_MAX langsamer.")
+	# Elite: halbe Wirkung.
+	var elite: CharacterBody3D = _make_zombie("elite", 1, Vector3(24.0, 0.0, 0.0))
+	elite.call("apply_slow", 0.3, 2.0)
+	_check_near(float(elite.call("get_speed_factor")), 1.0 - 0.3 * Balance.SLOW_ELITE_FACTOR, "Elite spürt nur die halbe Verlangsamung (Faktor 0,85).")
+	_check(_damaged.is_empty(), "Verlangsamen macht keinen Schaden.")
+
+	# --- Markierung: Regeln ---
+	_clear_log()
+	var target: CharacterBody3D = _make_zombie("elite", 1, Vector3(28.0, 0.0, 0.0))
+	_check(not bool(target.call("is_marked")) and is_equal_approx(float(target.call("get_damage_factor")), 1.0), "Ohne Markierung gilt der einfache Schaden.")
+	target.call("take_damage", 10.0, {"source": "bullet"})
+	_check_near(float(target.get("hp")), 390.0, "Unmarkiert kosten 10 Schaden 10 Leben.")
+	target.call("apply_mark", 0.25, 4.0)
+	_check(bool(target.call("is_marked")), "apply_mark markiert den Zombie.")
+	_check_near(float(target.call("get_damage_factor")), 1.25, "25 % Mehr-Schaden: Faktor 1,25.")
+	var mark: Node3D = target.get_node_or_null("Mark") as Node3D
+	_check(mark != null and mark.visible, "Über einem markierten Zombie steht das Zeichen.")
+	_damaged.clear()
+	target.call("take_damage", 10.0, {"source": "bullet"})
+	_check_near(float(target.get("hp")), 377.5, "Markiert kosten 10 Schaden 12,5 Leben.")
+	_check(_damaged.size() == 1 and is_equal_approx(float(_damaged[0]["amount"]), 12.5), "zombie_damaged meldet den erhöhten Betrag.")
+	# Aus jeder Quelle: auch der Brand.
+	target.call("apply_burn", 10.0, 1.0)
+	_step_zombie(target, 1.2)
+	_check_near(float(target.get("hp")), 377.5 - 12.5, "Auch Brand macht an Markierten 25 % mehr.")
+	# Die stärkste gilt, eine schwächere ändert sie nicht, die Zeit beginnt neu.
+	target.call("apply_mark", 0.5, 4.0)
+	_check_near(float(target.call("get_damage_factor")), 1.5, "Eine stärkere Markierung ersetzt die schwächere.")
+	target.call("apply_mark", 0.2, 4.0)
+	_check_near(float(target.call("get_damage_factor")), 1.5, "Eine schwächere ändert die stärkere nicht.")
+	_step_zombie(target, 3.0)
+	target.call("apply_mark", 0.2, 4.0)
+	_step_zombie(target, 3.0)
+	_check(bool(target.call("is_marked")), "Ein neuer Aufruf stellt die Zeit neu: nach 6 s noch markiert.")
+	_step_zombie(target, 1.2)
+	_check(not bool(target.call("is_marked")) and is_equal_approx(float(target.call("get_damage_factor")), 1.0), "4 s nach dem letzten Aufruf ist die Markierung vorbei.")
+	_check(mark != null and not mark.visible, "Das Zeichen verschwindet mit der Markierung.")
+	var hp_before: float = float(target.get("hp"))
+	target.call("take_damage", 10.0, {"source": "drone"})
+	_check_near(float(target.get("hp")), hp_before - 10.0, "Danach gilt wieder der einfache Schaden.")
+	target.call("apply_mark", 0.0, 4.0)
+	target.call("apply_mark", 0.3, 0.0)
+	_check(not bool(target.call("is_marked")), "apply_mark ohne Wirkung oder ohne Dauer tut nichts.")
+	# Tod räumt beides ab, ein toter Zombie nimmt nichts mehr an.
+	var victim: CharacterBody3D = _make_zombie("walker", 1, Vector3(32.0, 0.0, 0.0))
+	victim.call("apply_slow", 0.4, 5.0)
+	victim.call("apply_mark", 0.4, 5.0)
+	victim.call("take_damage", 1000.0, {"source": "bullet"})
+	_check(bool(victim.get("is_dead")) and not bool(victim.call("is_slowed")) and not bool(victim.call("is_marked")), "Mit dem Tod enden Verlangsamung und Markierung.")
+	victim.call("apply_slow", 0.4, 5.0)
+	victim.call("apply_mark", 0.4, 5.0)
+	_check(not bool(victim.call("is_slowed")) and not bool(victim.call("is_marked")), "Ein toter Zombie wird weder verlangsamt noch markiert.")
+	_remove_all_zombies()
+
+	# --- Verlangsamung: wirklich langsamer unterwegs ---
+	_player.position = Vector3.ZERO
+	_player.is_dead = false
+	_game.set("player", _player)
+	var fast: CharacterBody3D = _make_zombie("walker", 1, Vector3(30.0, 0.0, -8.0))
+	var slow: CharacterBody3D = _make_zombie("walker", 1, Vector3(30.0, 0.0, 8.0))
+	for i: int in 20:
+		await physics_frame
+	slow.call("apply_slow", 0.5, 60.0)
+	var fast_start: Vector3 = fast.global_position
+	var slow_start: Vector3 = slow.global_position
+	for i: int in 120:
+		await physics_frame
+	var fast_way: float = _flat_distance(fast.global_position, fast_start)
+	var slow_way: float = _flat_distance(slow.global_position, slow_start)
+	_check(fast_way > 1.5, "Der unverlangsamte Schlurfer kommt voran (%.2f m)." % fast_way)
+	_check(slow_way > fast_way * 0.35 and slow_way < fast_way * 0.65, "Mit 50 %% Verlangsamung schafft er etwa die halbe Strecke (%.2f m gegen %.2f m)." % [slow_way, fast_way])
+	_remove_all_zombies()
+	_player.hits.clear()
 	_game.set("player", _player)
 
 

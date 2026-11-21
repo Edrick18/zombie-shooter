@@ -157,7 +157,7 @@ func _test_offers_fresh() -> void:
 				seen[id] = true
 			_check(ids.size() == 3, "Die 3 Angebote sind verschieden: %s." % [offers])
 			_check(state.owned_ids().is_empty(), "build_offers ändert den Zustand nicht.")
-	_check(seen.size() == 10, "Über viele Seeds kommt jedes der 10 Upgrades vor, gesehen %d." % seen.size())
+	_check(seen.size() == 9, "Über viele Seeds kommt jedes der 9 Upgrades vor, gesehen %d." % seen.size())
 
 
 func _test_offers_seeded() -> void:
@@ -181,7 +181,7 @@ func _offers_for_seed(state: UpgradeState, seed_value: int) -> Array[Dictionary]
 ## Der Stufengewinn endet bei Stufe 5.
 func _test_offers_level_cap() -> void:
 	var state: UpgradeState = UpgradeState.new()
-	for id: String in ["burn", "drone", "luck", "pierce", "max_hp", "speed"]:
+	for id: String in ["burn", "lifesteal", "luck", "pierce", "max_hp", "speed"]:
 		state.add_levels(id, 4)
 	for rarity: int in 3:
 		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -189,7 +189,7 @@ func _test_offers_level_cap() -> void:
 		for offer: Dictionary in ChestRoller.build_offers(rng, state, rarity):
 			_check(int(offer["from_level"]) == 4 and int(offer["to_level"]) == 5, "Von Stufe 4 geht es höchstens auf 5: %s." % [offer])
 	var low: UpgradeState = UpgradeState.new()
-	for id: String in ["burn", "drone", "luck", "pierce", "max_hp", "speed"]:
+	for id: String in ["burn", "lifesteal", "luck", "pierce", "max_hp", "speed"]:
 		low.add_levels(id, 3)
 	var rng_low: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng_low.seed = 3
@@ -202,7 +202,7 @@ func _test_offers_level_cap() -> void:
 
 ## Sind alle 6 Plätze belegt, kommen nur Upgrades im Besitz, und Stufe 5 wird nie angeboten.
 func _test_offers_full_slots() -> void:
-	var owned: Array[String] = ["burn", "drone", "luck", "pierce", "max_hp", "speed"]
+	var owned: Array[String] = ["burn", "lifesteal", "luck", "pierce", "max_hp", "speed"]
 	var state: UpgradeState = UpgradeState.new()
 	for id: String in owned:
 		state.add_levels(id, 1)
@@ -223,7 +223,7 @@ func _test_offers_full_slots() -> void:
 
 
 func _test_consolation() -> void:
-	var owned: Array[String] = ["burn", "drone", "luck", "pierce", "max_hp", "speed"]
+	var owned: Array[String] = ["burn", "lifesteal", "luck", "pierce", "max_hp", "speed"]
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = 8
 
@@ -267,9 +267,13 @@ func _test_offer_texts() -> void:
 	_check(ChestRoller.offer_title(fresh) == "Feuershow", "Titel ist der Upgrade-Name.")
 	_check(ChestRoller.offer_level_text(fresh) == "Neu: Stufe 2", "Neues Upgrade: 'Neu: Stufe 2', war '%s'." % ChestRoller.offer_level_text(fresh))
 	_check(ChestRoller.offer_description(fresh) == UpgradeDefs.effect_text("burn", 2), "Beschreibung nennt die Zahlen der neuen Stufe.")
-	var raise: Dictionary = {"kind": "upgrade", "id": "drone", "from_level": 2, "to_level": 4}
+	var raise: Dictionary = {"kind": "upgrade", "id": "reload_shockwave", "from_level": 2, "to_level": 4}
 	_check(ChestRoller.offer_level_text(raise) == "Stufe 2 → 4", "Aufwertung: 'Stufe 2 → 4', war '%s'." % ChestRoller.offer_level_text(raise))
-	_check(ChestRoller.offer_description(raise).contains("0,65 s"), "Drohne auf Stufe 4 nennt 0,65 s.")
+	_check(ChestRoller.offer_description(raise).contains("5,5 m"), "Werbepause auf Stufe 4 nennt 5,5 m.")
+	# Eine Kamera als Gegenstand: Titel und Text kommen aus CameraDefs.
+	var camera: Dictionary = {"kind": "item", "id": "drone", "level": 4, "owned_level": 0}
+	_check(ChestRoller.offer_title(camera) == "Kameradrohne" and ChestRoller.offer_level_text(camera) == "Neu: Episch", "Die Kameradrohne als Gegenstand hat Titel und Rarität.")
+	_check(ChestRoller.offer_description(camera).contains("0,65 s") and ChestRoller.offer_description(camera).contains("36"), "Episch nennt 0,65 s und 36 Schaden: %s" % ChestRoller.offer_description(camera))
 	var points: Dictionary = ChestRoller.consolation_offer(0)
 	_check(ChestRoller.offer_title(points).contains("Punkte") and ChestRoller.offer_description(points).contains("500"), "Punkte-Trostpreis nennt 500 Punkte.")
 	_check(ChestRoller.offer_level_text(points) == "", "Trostpreise haben keine Stufenzeile.")

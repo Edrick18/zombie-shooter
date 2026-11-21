@@ -7,10 +7,11 @@ const Balance := preload("res://scripts/core/balance.gd")
 
 const MAX_LEVEL: int = Balance.UPGRADE_MAX_LEVEL
 
-## Feste Reihenfolge aller Upgrades (für Listen und Tests).
+## Feste Reihenfolge der ursprünglichen Upgrades (für Listen und Tests). Die Kameradrohne steht
+## seit Abschnitt 22 nicht mehr hier: Kameras sind eine eigene Art mit festen Werten (CameraDefs).
 const ORDER: Array[String] = [
 	"chain_lightning", "pierce", "burn", "lifesteal", "max_hp",
-	"corpse_explosion", "reload_shockwave", "drone", "speed", "luck",
+	"corpse_explosion", "reload_shockwave", "speed", "luck",
 ]
 
 ## Je Upgrade:
@@ -90,16 +91,6 @@ const UPGRADES: Dictionary = {
 		"fixed": {"cooldown": Balance.SHOCKWAVE_COOLDOWN},
 		"format": {"radius": "number", "damage": "number", "cooldown": "number"},
 	},
-	"drone": {
-		"name": "Kameradrohne",
-		"description": "Eine fliegende Kamera schießt alle {interval} s auf den nächsten Zombie in {range} m. Schaden {damage}.",
-		"values": {
-			"interval": [1.2, 1.0, 0.8, 0.65, 0.5],
-			"damage": [12, 16, 20, 24, 30],
-		},
-		"fixed": {"range": Balance.DRONE_RANGE},
-		"format": {"interval": "number", "damage": "number", "range": "number"},
-	},
 	"speed": {
 		"name": "Turbo-Turnschuhe",
 		"description": "+{bonus} % Lauftempo.",
@@ -119,7 +110,242 @@ const UPGRADES: Dictionary = {
 		"fixed": {},
 		"format": {"points_bonus": "percent", "chest_chance": "percent"},
 	},
+	# --- Abschnitt 19: Gegenstände, die es nur im Rucksack gibt (nicht in ORDER) ---
+	"extra_shot": {
+		"name": "Zugabe",
+		"description": "Die Waffe schießt je Schuss {shots} zusätzliche Kugel mit {damage_factor} % Schaden.",
+		"values": {
+			"shots": [1, 1, 1, 1, 1],
+			"damage_factor": [0.5, 0.6, 0.7, 0.85, 1.0],
+		},
+		"fixed": {},
+		"format": {"shots": "number", "damage_factor": "percent"},
+	},
+	"poison": {
+		"name": "Kantinenessen",
+		"description": "Treffer vergiften Zombies {duration} s lang: {dps} Schaden je Sekunde.",
+		"values": {
+			"dps": [6, 10, 14, 18, 24],
+		},
+		"fixed": {"duration": Balance.POISON_DURATION},
+		"format": {"dps": "number", "duration": "number"},
+	},
+	"crit": {
+		"name": "Glücksrad",
+		"description": "{chance} % Chance auf einen kritischen Treffer mit {multiplier}-fachem Schaden.",
+		"values": {
+			"chance": [0.10, 0.15, 0.20, 0.25, 0.30],
+		},
+		"fixed": {"multiplier": Balance.CRIT_MULTIPLIER},
+		"format": {"chance": "percent", "multiplier": "number"},
+	},
+	"big_mag": {
+		"name": "Überlänge",
+		"description": "+{bonus} % Magazingröße.",
+		"values": {
+			"bonus": [0.3, 0.45, 0.6, 0.8, 1.0],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
+	"scope": {
+		"name": "Teleprompter",
+		"description": "Halbe Streuung und +{headshot_bonus} % Kopfschuss-Schaden.",
+		"values": {
+			"headshot_bonus": [0.25, 0.35, 0.5, 0.6, 0.75],
+		},
+		"fixed": {},
+		"format": {"headshot_bonus": "percent"},
+	},
+	"fire_rate": {
+		"name": "Schnelldurchlauf",
+		"description": "Die Waffe schießt {bonus} % schneller.",
+		"values": {
+			"bonus": [0.10, 0.15, 0.20, 0.25, 0.30],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
+	"shield": {
+		"name": "Sicherheitsglas",
+		"description": "Schild mit {amount} Punkten. Es lädt sich wieder auf, wenn du {delay} s keinen Schaden nimmst.",
+		"values": {
+			"amount": [20, 30, 40, 50, 60],
+		},
+		"fixed": {"delay": Balance.SHIELD_RECHARGE_DELAY},
+		"format": {"amount": "number", "delay": "number"},
+	},
+	"kill_heal": {
+		"name": "Trostpflaster",
+		"description": "Jeder Kill heilt {heal} Leben.",
+		"values": {
+			"heal": [2, 3, 4, 5, 6],
+		},
+		"fixed": {},
+		"format": {"heal": "number"},
+	},
+	"disco_ball": {
+		"name": "Discokugel",
+		"description": "Kreist um dich und macht {damage} Schaden an jedem Zombie, den sie berührt. Mehrere Kugeln teilen ihre Kraft.",
+		"values": {
+			"damage": [15, 22, 30, 40, 55],
+		},
+		"fixed": {},
+		"format": {"damage": "number"},
+	},
+	"jammer": {
+		"name": "Störsender",
+		"description": "Alle {pause} s ein Elektroschlag auf Zombies im Umkreis von {radius} m: {damage} Schaden.",
+		"values": {
+			"damage": [30, 45, 60, 80, 100],
+			"radius": [4.0, 4.5, 5.0, 5.5, 6.0],
+		},
+		"fixed": {"pause": Balance.JAMMER_INTERVAL},
+		"format": {"damage": "number", "radius": "number", "pause": "number"},
+	},
+	"dash": {
+		"name": "Notausgang",
+		"description": "Ausweichsprung in Laufrichtung mit der Taste Q. Abklingzeit {cooldown} s. Jedes weitere Exemplar gibt einen Sprung mehr.",
+		"values": {
+			"cooldown": [4.0, 3.5, 3.0, 2.5, 2.0],
+			"charges": [1, 1, 1, 1, 1],
+		},
+		"fixed": {},
+		"format": {"cooldown": "number", "charges": "number"},
+	},
+	# --- Abschnitt 22.3: für die Waffe auf den Sternen ---
+	"frost": {
+		"name": "Trockeneis",
+		"description": "Kugeltreffer machen Zombies {duration} s lang {slow} % langsamer (Elite: halbe Wirkung).",
+		"values": {
+			"slow": [0.20, 0.25, 0.30, 0.35, 0.40],
+		},
+		"fixed": {"duration": Balance.FROST_DURATION},
+		"format": {"slow": "percent", "duration": "number"},
+	},
+	"opener": {
+		"name": "Eröffnungsgag",
+		"description": "Die erste Kugel jedes Magazins macht +{bonus} % Schaden.",
+		"values": {
+			"bonus": [1.0, 1.5, 2.0, 2.75, 3.5],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
+	"punchline": {
+		"name": "Schlusspointe",
+		"description": "Die letzte Kugel jedes Magazins explodiert am Einschlag: Radius {radius} m, Schaden {damage}.",
+		"values": {
+			"damage": [60, 90, 120, 160, 200],
+		},
+		"fixed": {"radius": Balance.PUNCHLINE_RADIUS},
+		"format": {"damage": "number", "radius": "number"},
+	},
+	"ricochet": {
+		"name": "Querschläger",
+		"description": "Kugeltreffer springen mit {chance} % auf einen weiteren Zombie im Umkreis von {radius} m, mit {factor} % des Schadens.",
+		"values": {
+			"chance": [0.20, 0.30, 0.40, 0.50, 0.60],
+		},
+		"fixed": {"radius": Balance.RICOCHET_RADIUS, "factor": Balance.RICOCHET_DAMAGE_FACTOR},
+		"format": {"chance": "percent", "radius": "number", "factor": "percent"},
+	},
+	# --- Abschnitt 22.3: für den Spieler als Ganzes ---
+	"thorns": {
+		"name": "Kaktus-Requisite",
+		"description": "Trifft dich ein Zombie, nehmen alle Zombies im Umkreis von {radius} m {damage} Schaden.",
+		"values": {
+			"damage": [40, 60, 80, 110, 140],
+		},
+		"fixed": {"radius": Balance.THORNS_RADIUS},
+		"format": {"damage": "number", "radius": "number"},
+	},
+	"revive": {
+		"name": "Zweite Staffel",
+		"description": "Ein tödlicher Treffer tötet dich nicht: Du stehst mit {hp} % Leben wieder auf, bist {safe} s unverwundbar und stößt alle Zombies weg. Kommt nach {waves} geschafften Wellen wieder. Jedes Exemplar ist eine Ladung.",
+		"values": {
+			"waves": [5, 4, 4, 3, 3],
+		},
+		"fixed": {"hp": Balance.REVIVE_HP_SHARE, "safe": Balance.REVIVE_INVULNERABILITY},
+		"format": {"waves": "number", "hp": "percent", "safe": "number"},
+	},
+	"snack": {
+		"name": "Pausensnack",
+		"description": "Am Ende jeder Welle heilst du zusätzlich {heal} Leben.",
+		"values": {
+			"heal": [10, 15, 20, 25, 35],
+		},
+		"fixed": {},
+		"format": {"heal": "number"},
+	},
+	"mine": {
+		"name": "Requisitenbombe",
+		"description": "Legt alle {interval} s eine Mine an deine Füße (höchstens {limit} zugleich). Kommt ein Zombie heran, explodiert sie: Radius {radius} m, Schaden {damage}.",
+		"values": {
+			"interval": [8.0, 7.0, 6.0, 5.0, 4.0],
+			"damage": [70, 100, 130, 170, 220],
+		},
+		"fixed": {"limit": Balance.MINE_MAX_ACTIVE, "radius": Balance.MINE_RADIUS},
+		"format": {"interval": "number", "damage": "number", "limit": "number", "radius": "number"},
+	},
+	# --- Abschnitt 22.1: Kamera-Gegenstände (wirken auf die Kamera auf ihren Sternen, die
+	# Sendeleitung ohne Sterne auf alle Kameras). Die Rechnung steht in CameraDefs.stats. ---
+	"cam_lens": {
+		"name": "Großes Objektiv",
+		"description": "+{bonus} % Schaden für die Kamera.",
+		"values": {
+			"bonus": [0.20, 0.30, 0.40, 0.55, 0.70],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
+	"cam_zoom": {
+		"name": "Zoom",
+		"description": "+{bonus} % Reichweite für die Kamera.",
+		"values": {
+			"bonus": [0.20, 0.30, 0.40, 0.50, 0.60],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
+	"cam_battery": {
+		"name": "Akkupack",
+		"description": "Die Kamera schießt {bonus} % schneller.",
+		"values": {
+			"bonus": [0.15, 0.25, 0.35, 0.45, 0.60],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
+	"cam_second": {
+		"name": "Zweitkamera",
+		"description": "Jeder Schuss der Kamera trifft ein zweites Ziel mit {share} % der Wirkung.",
+		"values": {
+			"share": [0.40, 0.55, 0.70, 0.85, 1.0],
+		},
+		"fixed": {},
+		"format": {"share": "percent"},
+	},
+	"cam_uplink": {
+		"name": "Sendeleitung",
+		"description": "Alle Kameras machen +{bonus} % Schaden und schießen {bonus} % schneller.",
+		"values": {
+			"bonus": [0.08, 0.12, 0.16, 0.20, 0.25],
+		},
+		"fixed": {},
+		"format": {"bonus": "percent"},
+	},
 }
+
+## Upgrades aus den Abschnitten 19 und 22: Es gibt sie nur als Gegenstand im Rucksack. Sie stehen
+## nicht in ORDER (das sind die ursprünglichen Upgrades).
+const ITEM_ONLY: Array[String] = [
+	"extra_shot", "poison", "crit", "big_mag", "scope", "fire_rate",
+	"shield", "kill_heal", "disco_ball", "jammer", "dash",
+	"frost", "opener", "punchline", "ricochet",
+	"thorns", "revive", "snack", "mine",
+	"cam_lens", "cam_zoom", "cam_battery", "cam_second", "cam_uplink",
+]
 
 ## Synergien: name, description (Textvorlage), requires (upgrade_id -> Mindeststufe),
 ## fixed und format wie bei den Upgrades. Eine Synergie belegt keinen Platz.
@@ -175,8 +401,13 @@ static func value(upgrade_id: String, key: String, level: int) -> float:
 ## Wie sich die Werte mehrerer Exemplare desselben Upgrades verbinden. Standard: addieren.
 ## "max": der beste Wert zählt (Reichweiten, Schadensanteile). "min": der kleinste (Abstände).
 ## Werte mit dem Schlüssel "chance" addieren sich und enden bei 1,0.
+## Abschnitt 22: "slow" (Trockeneis) nimmt den stärksten Wert, weil auch am Zombie nur die
+## stärkste Verlangsamung gilt. "waves" (Zweite Staffel) nimmt den kleinsten, die Ladungen selbst
+## zählt man über UpgradeState.copies("revive"). "interval" der Requisitenbombe nimmt wie alle
+## Abstände den kleinsten, ihr "damage" addiert sich.
 const STACK_MODES: Dictionary = {
 	"radius": "max", "range": "max", "damage_factor": "max", "damage_percent": "max", "interval": "min",
+	"cooldown": "min", "slow": "max", "waves": "min",
 }
 
 
@@ -202,6 +433,13 @@ static func combined_value(upgrade_id: String, key: String, levels: Array) -> fl
 	if key == "chance":
 		result = minf(result, 1.0)
 	return result
+
+
+## Schadensfaktor je Begleiter, wenn count gleiche Begleiter unterwegs sind (Discokugeln):
+## 1 / count hoch Balance.COMPANION_STACK_EXPONENT. Ein einzelner macht vollen Schaden.
+## Für Kameras gilt er seit Abschnitt 22 nicht mehr: Sie haben feste Werte.
+static func companion_factor(count: int) -> float:
+	return 1.0 / pow(float(maxi(count, 1)), Balance.COMPANION_STACK_EXPONENT)
 
 
 ## Deutscher Wirkungstext eines Upgrades mit den Zahlen der angegebenen Stufe (1 bis 5).

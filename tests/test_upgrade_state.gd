@@ -26,15 +26,38 @@ const EXPECTED: Dictionary = {
 		"radius": [4.0, 4.5, 5.0, 5.5, 6.0],
 		"damage": [20.0, 35.0, 50.0, 65.0, 80.0],
 	},
-	"drone": {
-		"interval": [1.2, 1.0, 0.8, 0.65, 0.5],
-		"damage": [12.0, 16.0, 20.0, 24.0, 30.0],
-	},
 	"speed": {"bonus": [0.08, 0.16, 0.24, 0.32, 0.40]},
 	"luck": {
 		"points_bonus": [0.10, 0.20, 0.30, 0.40, 0.50],
 		"chest_chance": [0.01, 0.02, 0.03, 0.04, 0.05],
 	},
+}
+
+## Abschrift der Tabellen aus Abschnitt 22.1 (Kamera-Gegenstände) und 22.3 (neue Gegenstände).
+const EXPECTED_ITEMS: Dictionary = {
+	"frost": {"slow": [0.20, 0.25, 0.30, 0.35, 0.40]},
+	"opener": {"bonus": [1.0, 1.5, 2.0, 2.75, 3.5]},
+	"punchline": {"damage": [60.0, 90.0, 120.0, 160.0, 200.0]},
+	"ricochet": {"chance": [0.20, 0.30, 0.40, 0.50, 0.60]},
+	"thorns": {"damage": [40.0, 60.0, 80.0, 110.0, 140.0]},
+	"revive": {"waves": [5.0, 4.0, 4.0, 3.0, 3.0]},
+	"snack": {"heal": [10.0, 15.0, 20.0, 25.0, 35.0]},
+	"mine": {
+		"interval": [8.0, 7.0, 6.0, 5.0, 4.0],
+		"damage": [70.0, 100.0, 130.0, 170.0, 220.0],
+	},
+	"cam_lens": {"bonus": [0.20, 0.30, 0.40, 0.55, 0.70]},
+	"cam_zoom": {"bonus": [0.20, 0.30, 0.40, 0.50, 0.60]},
+	"cam_battery": {"bonus": [0.15, 0.25, 0.35, 0.45, 0.60]},
+	"cam_second": {"share": [0.40, 0.55, 0.70, 0.85, 1.0]},
+	"cam_uplink": {"bonus": [0.08, 0.12, 0.16, 0.20, 0.25]},
+}
+
+const EXPECTED_ITEM_NAMES: Dictionary = {
+	"frost": "Trockeneis", "opener": "Eröffnungsgag", "punchline": "Schlusspointe", "ricochet": "Querschläger",
+	"thorns": "Kaktus-Requisite", "revive": "Zweite Staffel", "snack": "Pausensnack", "mine": "Requisitenbombe",
+	"cam_lens": "Großes Objektiv", "cam_zoom": "Zoom", "cam_battery": "Akkupack", "cam_second": "Zweitkamera",
+	"cam_uplink": "Sendeleitung",
 }
 
 const EXPECTED_NAMES: Dictionary = {
@@ -45,7 +68,6 @@ const EXPECTED_NAMES: Dictionary = {
 	"max_hp": "Stuntdouble",
 	"corpse_explosion": "Konfetti-Kanone",
 	"reload_shockwave": "Werbepause",
-	"drone": "Kameradrohne",
 	"speed": "Turbo-Turnschuhe",
 	"luck": "Publikumsliebling",
 }
@@ -55,6 +77,7 @@ var _failures := 0
 
 func _init() -> void:
 	_test_table()
+	_test_new_item_table()
 	_test_fixed_numbers()
 	_test_empty_state()
 	_test_add_levels()
@@ -74,8 +97,13 @@ func _init() -> void:
 
 ## Jede Stufe jedes Upgrades stimmt mit der Tabelle überein, über UpgradeDefs und UpgradeState.
 func _test_table() -> void:
-	_check(UpgradeDefs.all_ids().size() == 10, "Es gibt genau 10 Upgrades, waren %d." % UpgradeDefs.all_ids().size())
-	_check(UpgradeDefs.UPGRADES.size() == 10, "Die Tabelle hat genau 10 Einträge.")
+	_check(UpgradeDefs.all_ids().size() == 9, "Es gibt genau 9 Upgrades (die Kameradrohne ist seit Abschnitt 22 eine Kamera), waren %d." % UpgradeDefs.all_ids().size())
+	_check(not UpgradeDefs.has("drone"), "Die Kameradrohne steht nicht mehr in der Upgrade-Tabelle.")
+	_check(UpgradeDefs.UPGRADES.size() == 9 + UpgradeDefs.ITEM_ONLY.size() and UpgradeDefs.ITEM_ONLY.size() == 24, "Die Tabelle hat die 9 Upgrades und 24 Gegenstände, die es nur im Rucksack gibt.")
+	for item_only: String in UpgradeDefs.ITEM_ONLY:
+		_check(UpgradeDefs.has(item_only) and not UpgradeDefs.all_ids().has(item_only), "%s steht in der Tabelle, aber nicht in ORDER." % item_only)
+		_check(not UpgradeDefs.display_name(item_only).is_empty() and not UpgradeDefs.effect_text(item_only, 1).is_empty(), "%s hat Name und Text." % item_only)
+		_check(not UpgradeDefs.effect_text(item_only, 5).contains("{"), "Der Text von %s hat keine offenen Platzhalter: %s" % [item_only, UpgradeDefs.effect_text(item_only, 5)])
 	for id: String in EXPECTED:
 		_check(UpgradeDefs.has(id), "Upgrade %s fehlt." % id)
 		_check(UpgradeDefs.all_ids().has(id), "Upgrade %s fehlt in der Reihenfolge." % id)
@@ -96,6 +124,52 @@ func _test_table() -> void:
 	_check(UpgradeDefs.value("burn", "unbekannt", 3) == 0.0, "Unbekannter Schlüssel liefert 0.")
 	_check(UpgradeDefs.value("unbekannt", "bonus", 3) == 0.0, "Unbekanntes Upgrade liefert 0.")
 	_check(is_equal_approx(UpgradeDefs.value("burn", "dps_percent", 9), 0.12), "Stufen über 5 liefern den Wert der Stufe 5.")
+
+
+## Abschnitt 22: acht neue Gegenstände und fünf Kamera-Gegenstände, jede Zahl gegen die Tabelle.
+func _test_new_item_table() -> void:
+	for id: String in EXPECTED_ITEMS:
+		_check(UpgradeDefs.has(id) and UpgradeDefs.ITEM_ONLY.has(id), "%s steht in der Tabelle und in ITEM_ONLY." % id)
+		_check(UpgradeDefs.display_name(id) == String(EXPECTED_ITEM_NAMES[id]), "Name von %s war '%s'." % [id, UpgradeDefs.display_name(id)])
+		var keys: Array[String] = UpgradeDefs.value_keys(id)
+		_check(keys.size() == (EXPECTED_ITEMS[id] as Dictionary).size(), "%s hat andere Schlüssel als erwartet: %s." % [id, keys])
+		for key: String in EXPECTED_ITEMS[id]:
+			for level: int in range(1, 6):
+				var expected: float = float(EXPECTED_ITEMS[id][key][level - 1])
+				_check(is_equal_approx(UpgradeDefs.value(id, key, level), expected), "%s.%s Rarität %d: erwartet %s, war %s." % [id, key, level, expected, UpgradeDefs.value(id, key, level)])
+		for level: int in range(1, 6):
+			var text: String = UpgradeDefs.effect_text(id, level)
+			_check(text.length() > 10 and not text.contains("{") and not text.contains("}"), "%s Rarität %d hat einen Text ohne offene Platzhalter: %s" % [id, level, text])
+	# Feste Zahlen aus Abschnitt 22.3.
+	_check(is_equal_approx(Balance.FROST_DURATION, 2.0) and is_equal_approx(Balance.SLOW_ELITE_FACTOR, 0.5), "Trockeneis: 2 s, Elite halbe Wirkung.")
+	_check(is_equal_approx(Balance.PUNCHLINE_RADIUS, 3.0), "Schlusspointe: Radius 3 m.")
+	_check(is_equal_approx(Balance.RICOCHET_RADIUS, 6.0) and is_equal_approx(Balance.RICOCHET_DAMAGE_FACTOR, 0.6), "Querschläger: 6 m, 60 % Schaden.")
+	_check(is_equal_approx(Balance.THORNS_RADIUS, 2.5), "Kaktus-Requisite: Umkreis 2,5 m.")
+	_check(is_equal_approx(Balance.REVIVE_HP_SHARE, 0.3) and is_equal_approx(Balance.REVIVE_INVULNERABILITY, 1.5), "Zweite Staffel: 30 % Leben, 1,5 s unverwundbar.")
+	_check(Balance.MINE_MAX_ACTIVE == 5 and is_equal_approx(Balance.MINE_TRIGGER_RADIUS, 1.2) and is_equal_approx(Balance.MINE_RADIUS, 3.0), "Requisitenbombe: 5 Minen, Auslöser 1,2 m, Radius 3 m.")
+	# Texte nennen die Zahlen.
+	var frost: String = UpgradeDefs.effect_text("frost", 3)
+	_check(frost.contains("2 s") and frost.contains("30 %"), "Trockeneis Selten nennt 2 s und 30 %%: %s" % frost)
+	_check(UpgradeDefs.effect_text("opener", 4).contains("+275 %"), "Eröffnungsgag Episch nennt +275 %.")
+	var punchline: String = UpgradeDefs.effect_text("punchline", 2)
+	_check(punchline.contains("3 m") and punchline.contains("90"), "Schlusspointe Ungewöhnlich nennt 3 m und 90: %s" % punchline)
+	var ricochet: String = UpgradeDefs.effect_text("ricochet", 5)
+	_check(ricochet.contains("60 %") and ricochet.contains("6 m"), "Querschläger Legendär nennt 60 %% und 6 m: %s" % ricochet)
+	var revive: String = UpgradeDefs.effect_text("revive", 1)
+	_check(revive.contains("30 %") and revive.contains("1,5 s") and revive.contains("5 geschafften"), "Zweite Staffel nennt 30 %%, 1,5 s und 5 Wellen: %s" % revive)
+	var mine: String = UpgradeDefs.effect_text("mine", 5)
+	_check(mine.contains("4 s") and mine.contains("höchstens 5") and mine.contains("220"), "Requisitenbombe Legendär nennt 4 s, 5 Minen und 220: %s" % mine)
+	_check(UpgradeDefs.effect_text("cam_uplink", 5).contains("+25 %") and UpgradeDefs.effect_text("cam_second", 5).contains("100 %"), "Sendeleitung und Zweitkamera nennen ihre Prozente.")
+	# Mehrere Exemplare.
+	_check(is_equal_approx(UpgradeDefs.combined_value("frost", "slow", [1, 5, 2]), 0.40), "Trockeneis: Die stärkste Verlangsamung gilt.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("opener", "bonus", [1, 1]), 2.0), "Zwei Eröffnungsgags addieren sich.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("punchline", "damage", [1, 2]), 150.0), "Zwei Schlusspointen addieren den Schaden.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("ricochet", "chance", [5, 5]), 1.0), "Querschläger-Chance endet bei 100 %.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("thorns", "damage", [1, 5]), 180.0), "Kakteen addieren den Schaden.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("revive", "waves", [1, 5]), 3.0), "Zweite Staffel: Die kürzeste Wartezeit zählt.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("snack", "heal", [1, 5]), 45.0), "Pausensnacks addieren die Heilung.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("mine", "interval", [1, 5]), 4.0) and is_equal_approx(UpgradeDefs.combined_value("mine", "damage", [1, 5]), 290.0), "Requisitenbombe: kürzester Abstand, Schaden addiert sich.")
+	_check(is_equal_approx(UpgradeDefs.combined_value("cam_lens", "bonus", [1, 2]), 0.5), "Kamera-Gegenstände addieren sich.")
 
 
 ## Feste Zahlen der Upgrades aus Abschnitt 8, die in Balance stehen.
@@ -125,7 +199,7 @@ func _test_empty_state() -> void:
 	_check(state.bonus_max_hp() == 0.0, "Kein Bonus-Leben ohne Stuntdouble.")
 	_check(state.luck_level() == 0, "Glück-Stufe 0.")
 	_check(state.chest_chance_bonus() == 0.0, "Keine Extra-Kistenchance ohne Glück.")
-	_check(state.eligible_ids().size() == 10, "Am Anfang sind alle 10 Upgrades wählbar.")
+	_check(state.eligible_ids().size() == 9, "Am Anfang sind alle 9 Upgrades wählbar.")
 	_check(state.eligible_ids() == UpgradeDefs.all_ids(), "Wählbare kommen in der festen Reihenfolge.")
 	_check(not state.has_synergy("storm_front"), "Keine Synergie am Anfang.")
 	_check(state.check_new_synergies().is_empty(), "Keine neue Synergie am Anfang.")
@@ -142,10 +216,11 @@ func _test_add_levels() -> void:
 	_check(state.add_levels("pierce", 0) == 0 and state.get_level("pierce") == 0, "0 Stufen ändern nichts.")
 	_check(state.add_levels("pierce", -2) == 0 and state.get_level("pierce") == 0, "Negative Stufen ändern nichts.")
 	_check(state.free_slots() == 5, "Ein Upgrade belegt einen Platz, frei waren %d." % state.free_slots())
-	state.add_levels("drone", 1)
+	state.add_levels("speed", 1)
 	state.add_levels("luck", 1)
 	state.add_levels("burn", 1)
-	var order: Array[String] = ["burn", "drone", "luck"]
+	_check(state.add_levels("drone", 1) == 0 and state.get_level("drone") == 0, "Die Kameradrohne ist kein Upgrade mehr: add_levels nimmt sie nicht an.")
+	var order: Array[String] = ["burn", "speed", "luck"]
 	_check(state.owned_ids() == order, "Besitz in der Reihenfolge des Erwerbs, war %s." % [state.owned_ids()])
 
 
@@ -157,7 +232,7 @@ func _test_slot_limit() -> void:
 		state.add_levels(first_six[i], 1)
 		_check(state.free_slots() == 5 - i, "Nach %d Upgrades sind %d Plätze frei." % [i + 1, 5 - i])
 	_check(state.free_slots() == 0, "Nach 6 Upgrades ist kein Platz frei.")
-	for id: String in ["reload_shockwave", "drone", "speed", "luck"]:
+	for id: String in ["reload_shockwave", "speed", "luck"]:
 		_check(not state.is_eligible(id), "%s ist ohne freien Platz nicht wählbar." % id)
 		_check(state.add_levels(id, 2) == 0, "%s wird ohne freien Platz nicht aufgenommen." % id)
 		_check(state.get_level(id) == 0, "%s bleibt auf Stufe 0." % id)
@@ -175,9 +250,9 @@ func _test_eligibility() -> void:
 	state.add_levels("speed", 1)
 	_check(not state.is_eligible("speed"), "Stufe 5 ist nicht mehr wählbar.")
 	_check(not state.eligible_ids().has("speed"), "Stufe 5 fehlt in der Liste der wählbaren.")
-	_check(state.eligible_ids().size() == 9, "Die anderen 9 bleiben wählbar.")
+	_check(state.eligible_ids().size() == 8, "Die anderen 8 bleiben wählbar.")
 	# Alle 6 Plätze auf Stufe 5: nichts mehr wählbar.
-	for id: String in ["burn", "drone", "luck", "pierce", "max_hp"]:
+	for id: String in ["burn", "lifesteal", "luck", "pierce", "max_hp"]:
 		state.add_levels(id, 5)
 	_check(state.free_slots() == 0 and state.eligible_ids().is_empty(), "Mit 6 Upgrades auf Stufe 5 ist nichts mehr wählbar.")
 
@@ -232,8 +307,6 @@ func _test_effect_texts() -> void:
 	_check(explosion.contains("20 %") and explosion.contains("3,25 m") and explosion.contains("40 %"), "Konfetti Stufe 2 nennt 20 %%, 3,25 m und 40 %%: %s" % explosion)
 	var chain: String = UpgradeDefs.effect_text("chain_lightning", 5)
 	_check(chain.contains("30 %") and chain.contains("6 weitere") and chain.contains("100 %") and chain.contains("6 m"), "Blitz Stufe 5 nennt 30 %%, 6 Sprünge, 100 %% und 6 m: %s" % chain)
-	var drone: String = UpgradeDefs.effect_text("drone", 4)
-	_check(drone.contains("0,65 s") and drone.contains("24") and drone.contains("15 m"), "Drohne Stufe 4 nennt 0,65 s, 24 und 15 m: %s" % drone)
 	var pierce: String = UpgradeDefs.effect_text("pierce", 3)
 	_check(pierce.contains(": 3.") and pierce.contains("15 %"), "Durchschlag Stufe 3 nennt 3 Ziele und 15 %%: %s" % pierce)
 	var burn: String = UpgradeDefs.effect_text("burn", 5)
@@ -256,11 +329,11 @@ func _test_effect_texts() -> void:
 
 func _test_summary() -> void:
 	var state: UpgradeState = UpgradeState.new()
-	state.add_levels("drone", 2)
+	state.add_levels("speed", 2)
 	state.add_levels("burn", 1)
 	var rows: Array[Dictionary] = state.summary()
 	_check(rows.size() == 2, "Übersicht hat zwei Zeilen.")
-	_check(rows[0]["id"] == "drone" and rows[0]["name"] == "Kameradrohne" and rows[0]["level"] == 2, "Erste Zeile: Kameradrohne Stufe 2, war %s." % [rows[0]])
+	_check(rows[0]["id"] == "speed" and rows[0]["name"] == "Turbo-Turnschuhe" and rows[0]["level"] == 2, "Erste Zeile: Turbo-Turnschuhe Stufe 2, war %s." % [rows[0]])
 	_check(rows[1]["id"] == "burn" and rows[1]["name"] == "Feuershow" and rows[1]["level"] == 1, "Zweite Zeile: Feuershow Stufe 1, war %s." % [rows[1]])
 
 

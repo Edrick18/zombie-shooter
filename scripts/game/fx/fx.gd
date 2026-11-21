@@ -1,7 +1,7 @@
 extends RefCounted
 ## Modul: FX (scripts/game/fx).
-## Kurzlebige Effekte aus einfachen Formen: Leuchtspur, Mündungsfeuer, Blitzbogen, Explosion,
-## Konfetti, Druckwelle, Trefferzahl, Aufblitzen.
+## Kurzlebige Effekte aus einfachen Formen: Leuchtspur, Mündungsfeuer, Blitzbogen, Blitzstern,
+## Explosion, Konfetti, Druckwelle, Trefferzahl, Aufblitzen.
 ##
 ## Regeln für jede Funktion:
 ## - nur statische Funktionen, Einbinden mit const Fx := preload("res://scripts/game/fx/fx.gd")
@@ -149,17 +149,44 @@ static func lightning(parent: Node, points: PackedVector3Array) -> void:
 	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _lightning_mat())
 	var vertex_count: int = 0
 	for i: int in points.size() - 1:
-		var path: PackedVector3Array = _jagged_path(points[i], points[i + 1])
-		for j: int in path.size() - 1:
-			vertex_count += _add_ribbon(mesh, path[j], path[j + 1], LIGHTNING_WIDTH, LIGHTNING_COLOR)
-			vertex_count += _add_ribbon(mesh, path[j], path[j + 1], LIGHTNING_CORE_WIDTH, LIGHTNING_CORE_COLOR)
-		# Kleiner Seitenast in der Mitte des Bogens.
-		if path.size() > 2:
-			var mid: Vector3 = path[path.size() / 2]
-			var fork_end: Vector3 = mid + _random_unit() * randf_range(0.35, 0.8)
-			vertex_count += _add_ribbon(mesh, mid, fork_end, LIGHTNING_CORE_WIDTH * 1.5, LIGHTNING_COLOR)
-		# Funkenstern am Einschlag.
-		vertex_count += _add_spark(mesh, points[i + 1], 0.32)
+		vertex_count += _add_bolt(mesh, points[i], points[i + 1])
+	_show_lightning(parent, mesh, vertex_count, points[points.size() - 1])
+
+
+## Blitze von origin zu jedem Ziel (Weltkoordinaten), alle in einem einzigen Netz: für einen
+## Schlag, der viele Zombies zugleich trifft (Störsender). Ohne Ziel passiert nichts.
+static func lightning_star(parent: Node, origin: Vector3, targets: PackedVector3Array) -> void:
+	if not _usable(parent) or targets.is_empty():
+		return
+	var mesh: ImmediateMesh = ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _lightning_mat())
+	var vertex_count: int = 0
+	for target: Vector3 in targets:
+		vertex_count += _add_bolt(mesh, origin, target)
+	_show_lightning(parent, mesh, vertex_count, origin)
+
+
+## Ein zackiger Blitz von a nach b in eine offene Fläche von mesh: Bogen, kleiner Seitenast und
+## Funkenstern am Einschlag. Gibt die Zahl der Ecken zurück.
+static func _add_bolt(mesh: ImmediateMesh, a: Vector3, b: Vector3) -> int:
+	var vertex_count: int = 0
+	var path: PackedVector3Array = _jagged_path(a, b)
+	for j: int in path.size() - 1:
+		vertex_count += _add_ribbon(mesh, path[j], path[j + 1], LIGHTNING_WIDTH, LIGHTNING_COLOR)
+		vertex_count += _add_ribbon(mesh, path[j], path[j + 1], LIGHTNING_CORE_WIDTH, LIGHTNING_CORE_COLOR)
+	# Kleiner Seitenast in der Mitte des Bogens.
+	if path.size() > 2:
+		var mid: Vector3 = path[path.size() / 2]
+		var fork_end: Vector3 = mid + _random_unit() * randf_range(0.35, 0.8)
+		vertex_count += _add_ribbon(mesh, mid, fork_end, LIGHTNING_CORE_WIDTH * 1.5, LIGHTNING_COLOR)
+	# Funkenstern am Einschlag.
+	vertex_count += _add_spark(mesh, b, 0.32)
+	return vertex_count
+
+
+## Schließt die Fläche eines Blitz-Netzes ab, hängt es in parent und lässt es kurz flackern, mit
+## einem kurzen Licht an light_pos.
+static func _show_lightning(parent: Node, mesh: ImmediateMesh, vertex_count: int, light_pos: Vector3) -> void:
 	if vertex_count == 0:
 		# Alle Punkte lagen aufeinander: Eine leere Fläche darf nicht abgeschlossen werden.
 		mesh.surface_add_vertex(Vector3.ZERO)
@@ -172,7 +199,7 @@ static func lightning(parent: Node, points: PackedVector3Array) -> void:
 	arc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(arc)
 	arc.global_transform = Transform3D.IDENTITY
-	_add_light(parent, points[points.size() - 1], Color(0.4, 0.9, 1.0), 2.5, 6.0, LIGHTNING_TIME)
+	_add_light(parent, light_pos, Color(0.4, 0.9, 1.0), 2.5, 6.0, LIGHTNING_TIME)
 	# Flackern: an, kurz aus, wieder an, weg.
 	var tween: Tween = arc.create_tween()
 	tween.tween_interval(LIGHTNING_TIME * 0.4)

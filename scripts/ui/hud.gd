@@ -1,8 +1,10 @@
 extends CanvasLayer
 ## Modul: Oberfläche (scripts/ui).
-## HUD während des Spiels (Abschnitt 11): Lebensbalken, Punkte, Welle und verbleibende Zombies,
-## Waffe und Munition, Fadenkreuz, Treffermarker, Interaktions-Hinweis, Upgrade-Leiste,
-## Banner, roter Rand bei Schaden, Countdown zwischen den Wellen.
+## HUD während des Spiels (Abschnitt 11): Lebensbalken, Schild, Ausweichsprünge und Ladungen der
+## Zweiten Staffel (nur mit Sicherheitsglas, Notausgang bzw. Zweiter Staffel, Abschnitte 19.2 und
+## 22.3), Punkte, Welle und verbleibende Zombies, Waffe und Munition, Fadenkreuz, Treffermarker,
+## Interaktions-Hinweis, Buff-Anzeige (Boni, Verbindungen und die Kameras im Spiel), Banner,
+## roter Rand bei Schaden, Countdown zwischen den Wellen.
 ##
 ## Das HUD liest nur: Es hört auf Events und fragt Namen und Texte bei UpgradeDefs und WeaponDefs
 ## ab. Bei run_started stellt es alles auf Anfang und holt sich Leben und Waffe vom Spieler,
@@ -47,6 +49,10 @@ const UPGRADE_COLORS: Dictionary = {
 	"drone": Color(0.3, 0.32, 0.42),
 	"speed": Color(0.95, 0.5, 0.05),
 	"luck": Color(0.85, 0.1, 0.45),
+	"cam_tele": Color(0.3, 0.26, 0.7),
+	"cam_flash": Color(0.5, 0.3, 0.8),
+	"cam_slow": Color(0.2, 0.42, 0.75),
+	"cam_director": Color(0.55, 0.2, 0.55),
 	"synergy": Color(0.45, 0.1, 0.9),
 	"points": Color(0.15, 0.45, 0.2),
 	"heal": Color(0.92, 0.92, 0.96),
@@ -67,6 +73,11 @@ const LOW_HP_RATIO: float = 0.3
 ## Deckkraft des roten Rands bei wenig Leben (Grundwert und Pulsieren).
 const LOW_HP_VIGNETTE: float = 0.42
 const LOW_HP_VIGNETTE_PULSE: float = 0.14
+## Schild-Anzeige (Sicherheitsglas): Farbe von Zahl und Balken, klar anders als das Leben.
+const SHIELD_COLOR: Color = COL_CYAN
+## Anzeige der Ausweichsprünge (Notausgang): Größe eines Kästchens und Taste.
+const DASH_PIP_SIZE: Vector2 = Vector2(26.0, 14.0)
+const DASH_KEY_TEXT: String = "Q"
 const BANNER_HOLD: float = 1.7
 const BANNER_HOLD_BUSY: float = 0.9
 const BANNER_MAX_QUEUE: int = 5
@@ -83,9 +94,15 @@ const GAIN_COMBO_WINDOW: float = 0.5
 const RELOAD_GRACE: float = 0.3
 const VIGNETTE_FADE_SPEED: float = 1.6
 const UPGRADE_ROW_SIZE: Vector2 = Vector2(252.0, 44.0)
-## Zeile der Buff-Anzeige links (höchstens sechs: vier Werte, Leben, Verbindung).
+## Anzeige der Ladungen der Zweiten Staffel: Schriftzug und Farbe.
+const REVIVE_TAG_TEXT: String = "2. STAFFEL"
+const REVIVE_COLOR: Color = COL_PINK
+## Zeile der Buff-Anzeige links (höchstens elf: vier Werte, Leben, Verbindung, fünf Kameratypen).
 const BUFF_ROW_SIZE: Vector2 = Vector2(200.0, 28.0)
 const BUFF_ROW_STEP: float = 32.0
+const BUFF_MAX_ROWS: int = 11
+## Farbe der Kamera-Zeilen in der Buff-Anzeige.
+const CAMERA_ROW_COLOR: Color = Color(0.74, 0.7, 1.0)
 const UPGRADE_ROW_STEP: float = 48.0
 const RELOAD_KEY_TEXT: String = "R"
 ## Waffenanzeige unten rechts: höchstens so viele Hände, Maße der Kästen je Hand.
@@ -125,6 +142,11 @@ static func show_font(slanted: bool = false) -> Font:
 ## Gibt die gemerkten Schriften frei (vor dem Programmende aufrufen, sonst unnötig).
 static func clear_font_cache() -> void:
 	_font_cache.clear()
+
+
+## Gibt es für diese ID ein gezeichnetes Bild (UpgradeIcon)?
+static func has_icon(icon_id: String) -> bool:
+	return ICON_IDS.has(icon_id)
 
 
 ## Setzt Schrift, Größe, Farbe, dunklen Rand und Schatten eines Labels.
@@ -301,8 +323,24 @@ static func fit_font_size(text: String, font_size: int, max_width: float, slante
 	return fitted
 
 
-## Eine Zeile "Symbol, Name, Stufen-Punkte, Stufe" für Upgrade-Leiste und Game Over.
-## Kinder: "Icon", "Name" (Label), "Pips", "Level" (Label mit der Stufe, "MAX" bei Stufe 5).
+## Ersetzt das Leerzeichen zwischen Zahl und Einheit ("15 m", "3 s", "15 %") durch ein
+## geschütztes, damit der Zeilenumbruch die beiden nie trennt.
+static func keep_units_together(text: String) -> String:
+	var pattern: RegEx = RegEx.new()
+	if pattern.compile("([0-9]) (m|s|%)(?![a-zäöüß])") != OK:
+		return text
+	return pattern.sub(text, "$1" + String.chr(0x00A0) + "$2", true)
+
+
+## Name eines Upgrades, Gegenstands oder einer Kamera für Listen (Kameras stehen seit Abschnitt 22
+## nicht mehr in UpgradeDefs).
+static func entry_name(id: String) -> String:
+	return ItemDefs.display_name(id) if ItemDefs.has(id) else UpgradeDefs.display_name(id)
+
+
+## Eine Zeile "Symbol, Name, Rarität" für die Liste im Game Over (Upgrades und Kameras).
+## Kinder: "Icon", "Name" (Label), "Rarity" (Label mit der Rarität in ihrer Farbe).
+## Zeilen unter 42 Pixeln Höhe werden enger gesetzt (kleinere Schrift).
 static func make_upgrade_row(upgrade_id: String, level: int, row_size: Vector2) -> Control:
 	var row: Control = Control.new()
 	row.name = "Row_%s" % upgrade_id
@@ -316,26 +354,41 @@ static func make_upgrade_row(upgrade_id: String, level: int, row_size: Vector2) 
 	plate.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	row.add_child(plate)
 	var icon_size: float = row_size.y - 10.0
-	var icon: UpgradeIcon = UpgradeIcon.new()
-	icon.name = "Icon"
-	icon.icon_id = upgrade_id
-	anchor_box(icon, Vector2.ZERO, Vector2(7.0, 5.0), Vector2(icon_size, icon_size))
-	row.add_child(icon)
+	if has_icon(upgrade_id):
+		var icon: UpgradeIcon = UpgradeIcon.new()
+		icon.name = "Icon"
+		icon.icon_id = upgrade_id
+		anchor_box(icon, Vector2.ZERO, Vector2(7.0, 5.0), Vector2(icon_size, icon_size))
+		row.add_child(icon)
+	else:
+		# Neuere Gegenstände haben kein gezeichnetes Bild: Sie zeigen ihre Form.
+		var shape_icon: ItemShape = ItemShape.new()
+		shape_icon.name = "Icon"
+		shape_icon.item_id = upgrade_id
+		shape_icon.max_cell = icon_size * 0.56
+		anchor_box(shape_icon, Vector2.ZERO, Vector2(7.0, 5.0), Vector2(icon_size, icon_size))
+		row.add_child(shape_icon)
+	var compact: bool = row_size.y < 42.0
 	var text_left: float = icon_size + 14.0
 	var name_width: float = row_size.x - text_left - 8.0
-	var display_name: String = UpgradeDefs.display_name(upgrade_id)
-	var name_label: Label = make_label(display_name, fit_font_size(display_name, 15, name_width - 6.0, false, 11), COL_WHITE)
+	var display_name: String = entry_name(upgrade_id)
+	var name_label: Label = make_label(display_name, fit_font_size(display_name, 13 if compact else 15, name_width - 6.0, false, 10 if compact else 11), COL_WHITE)
 	name_label.name = "Name"
 	name_label.clip_text = true
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	anchor_box(name_label, Vector2.ZERO, Vector2(text_left, 1.0), Vector2(name_width, 24.0))
+	anchor_box(name_label, Vector2.ZERO, Vector2(text_left, 0.0 if compact else 1.0), Vector2(name_width, 20.0 if compact else 24.0))
 	row.add_child(name_label)
 	# Unter dem Namen steht die Rarität in ihrer Farbe (die Stufe, mit der das Upgrade wirkt).
-	var rarity_label: Label = make_label(ItemDefs.rarity_name(level).to_upper(), 12, rarity_color, true)
+	var rarity_label: Label = make_label(ItemDefs.rarity_name(level).to_upper(), 10 if compact else 12, rarity_color, true)
 	rarity_label.name = "Rarity"
 	rarity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	anchor_box(rarity_label, Vector2.ZERO, Vector2(text_left, row_size.y - 22.0), Vector2(name_width, 18.0))
+	if compact:
+		rarity_label.add_theme_constant_override("outline_size", 3)
+		rarity_label.add_theme_constant_override("shadow_outline_size", 3)
+		name_label.add_theme_constant_override("outline_size", 3)
+		name_label.add_theme_constant_override("shadow_outline_size", 3)
+	anchor_box(rarity_label, Vector2.ZERO, Vector2(text_left, row_size.y - (18.0 if compact else 22.0)), Vector2(name_width, 16.0 if compact else 18.0))
 	row.add_child(rarity_label)
 	return row
 
@@ -492,6 +545,32 @@ class UpgradeIcon:
 				draw_polyline(_poly([0.5, 0.24, 0.76, 0.5, 0.5, 0.76]), COL_YELLOW, line * 1.2)
 			"luck":
 				draw_colored_polygon(_star(Vector2(0.5, 0.53), 0.38, 0.16), COL_YELLOW)
+			"cam_tele":
+				# Kamera mit langem Objektiv.
+				draw_rect(Rect2(_p(0.12, 0.36), _p(0.3, 0.36)), COL_WHITE)
+				draw_colored_polygon(_poly([0.42, 0.44, 0.84, 0.32, 0.84, 0.76, 0.42, 0.64]), COL_CYAN)
+				draw_line(_p(0.84, 0.32), _p(0.84, 0.76), COL_INK, line * 0.7)
+				draw_circle(_p(0.27, 0.54), size.x * 0.06, COL_RED)
+			"cam_flash":
+				# Kamera mit Blitz obenauf.
+				draw_rect(Rect2(_p(0.18, 0.46), _p(0.64, 0.36)), COL_WHITE)
+				draw_circle(_p(0.5, 0.64), size.x * 0.12, COL_INK)
+				draw_circle(_p(0.5, 0.64), size.x * 0.05, COL_CYAN)
+				draw_colored_polygon(_star(Vector2(0.5, 0.26), 0.22, 0.09), COL_YELLOW)
+			"cam_slow":
+				# Kamera mit Uhr als Linse.
+				draw_rect(Rect2(_p(0.14, 0.3), _p(0.72, 0.48)), COL_WHITE)
+				draw_circle(_p(0.5, 0.54), size.x * 0.18, COL_INK)
+				draw_line(_p(0.5, 0.54), _p(0.5, 0.42), COL_CYAN, line * 0.7)
+				draw_line(_p(0.5, 0.54), _p(0.6, 0.58), COL_CYAN, line * 0.7)
+			"cam_director":
+				# Filmklappe.
+				draw_rect(Rect2(_p(0.16, 0.44), _p(0.68, 0.38)), COL_WHITE)
+				draw_colored_polygon(_poly([0.16, 0.34, 0.8, 0.18, 0.84, 0.3, 0.2, 0.46]), COL_INK)
+				for i: int in 3:
+					var x: float = 0.26 + 0.2 * float(i)
+					draw_line(_p(x, 0.32), _p(x + 0.08, 0.4 - 0.05), COL_YELLOW, line * 0.9)
+				draw_circle(_p(0.5, 0.63), size.x * 0.08, COL_PINK)
 			"synergy":
 				draw_colored_polygon(_star(Vector2(0.5, 0.53), 0.42, 0.2), COL_YELLOW)
 				draw_colored_polygon(_bolt(), COL_PINK)
@@ -552,11 +631,24 @@ class ItemShape:
 		var cell: float = minf(max_cell, minf(size.x / float(extent.x), size.y / float(extent.y)))
 		var origin: Vector2 = (size - Vector2(extent) * cell) * 0.5
 		var fill: Color = ItemDefs.color(item_id)
+		# Sehr kleine Kästchen (lange Waffen in einem kleinen Bild) bekommen dünnere Ränder,
+		# sonst bliebe von der Farbe nichts übrig.
+		var small: bool = cell < 13.0
 		for entry: Vector2i in cells:
-			var rect: Rect2 = Rect2(origin + Vector2(entry) * cell, Vector2(cell, cell)).grow(-1.5)
+			var rect: Rect2 = Rect2(origin + Vector2(entry) * cell, Vector2(cell, cell)).grow(-0.5 if small else -1.5)
 			draw_rect(rect, Color(0.05, 0.04, 0.12))
-			draw_rect(rect.grow(-2.0), fill)
-			draw_rect(Rect2(rect.position + Vector2(3.0, 3.0), Vector2(rect.size.x - 6.0, rect.size.y * 0.28)), fill.lightened(0.45))
+			draw_rect(rect.grow(-1.0 if small else -2.0), fill)
+			if not small:
+				draw_rect(Rect2(rect.position + Vector2(3.0, 3.0), Vector2(rect.size.x - 6.0, rect.size.y * 0.28)), fill.lightened(0.45))
+
+
+## IDs, für die UpgradeIcon ein eigenes Bild zeichnet. Alle anderen Gegenstände zeigen ihre Form.
+const ICON_IDS: Array[String] = [
+	"chain_lightning", "pierce", "burn", "lifesteal", "max_hp",
+	"corpse_explosion", "reload_shockwave", "drone", "speed", "luck",
+	"cam_tele", "cam_flash", "cam_slow", "cam_director",
+	"synergy", "points", "heal",
+]
 
 
 ## Stufen-Punkte: max_level schräge Kästchen, level davon gefüllt. Kästchen ab gained_from
@@ -818,6 +910,26 @@ var health_label: Label
 ## "/ 100".
 var health_max_label: Label
 var health_bar: SlantBar
+## Schild-Anzeige (Sicherheitsglas) am Lebensbalken: Behälter mit "SCHILD", Zahl und Balken.
+## Nur sichtbar, solange der Spieler ein Schild hat (max_shield > 0).
+var shield_box: Control
+## Aktuelles Schild als ganze Zahl (cyan).
+var shield_label: Label
+## "/ 40": Höchstwert des Schilds.
+var shield_max_label: Label
+## Schmaler cyanfarbener Balken direkt unter dem Lebensbalken.
+var shield_bar: SlantBar
+## Anzeige der Ausweichsprünge (Notausgang) rechts neben dem Lebensbalken: Taste und Kästchen.
+## Nur sichtbar, solange der Spieler Sprünge hat (max_dash_charges > 0).
+var dash_box: Control
+## Je Sprung ein Kästchen (max_level = höchstens mögliche, level = verfügbare Sprünge).
+var dash_pips: Pips
+## Anzeige der Ladungen der Zweiten Staffel: Schriftzug "2. STAFFEL" und je Ladung ein Kästchen.
+## Steht direkt über der Sprung-Anzeige (ohne Notausgang an deren Platz). Nur sichtbar, solange
+## eine Zweite Staffel im Rucksack liegt (max_charges > 0).
+var revive_box: Control
+## Je Ladung ein Kästchen (max_level = Ladungen im Rucksack, level = bereite Ladungen).
+var revive_pips: Pips
 ## Waffenanzeige unten rechts, je Hand ein Kasten (Index 0 = linke Hand). Bei einer Waffe ist nur
 ## Kasten 0 zu sehen, bei zwei Waffen steht die linke Hand links neben der rechten. Kinder je
 ## Kasten: "Side" (Label "LINKS" oder "RECHTS", nur bei zwei Waffen), "Name" (Label),
@@ -875,6 +987,14 @@ var _hp: float = Balance.PLAYER_MAX_HP
 var _max_hp: float = Balance.PLAYER_MAX_HP
 var _low_hp: bool = false
 var _damage_flash: float = 0.0
+## Stand von Schild und Ausweichsprüngen (0 = nicht vorhanden).
+var _shield: float = 0.0
+var _max_shield: float = 0.0
+var _dash_charges: int = 0
+var _max_dash_charges: int = 0
+var _revive_charges: int = 0
+var _max_revive_charges: int = 0
+var _shield_tween: Tween
 ## Zahl der gezeigten Hände (1 oder 2) und ihr Stand, je Hand ein Eintrag.
 var _hand_count: int = 1
 var _hand_ids: Array[String] = [WeaponDefs.START_WEAPON, ""]
@@ -1062,6 +1182,93 @@ func _build_health() -> void:
 	health_bar.slant = 12.0
 	anchor_box(health_bar, Vector2(0.0, 1.0), Vector2(MARGIN, -54.0), Vector2(340.0, 32.0))
 	root.add_child(health_bar)
+	_build_shield()
+	_build_dash()
+	_build_revive()
+
+
+## Schild-Anzeige: Zahl rechts über dem Lebensbalken, schmaler Balken direkt darunter. Der
+## Behälter deckt die Fläche der Lebensanzeige, seine Kinder liegen relativ zu ihm.
+func _build_shield() -> void:
+	shield_box = Control.new()
+	shield_box.name = "Shield"
+	shield_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	anchor_box(shield_box, Vector2(0.0, 1.0), Vector2(MARGIN, -128.0), Vector2(340.0, 122.0))
+	shield_box.visible = false
+	root.add_child(shield_box)
+	var tag: Label = make_label("SCHILD", 15, SHIELD_COLOR, true)
+	tag.name = "ShieldTag"
+	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	anchor_box(tag, Vector2.ZERO, Vector2(196.0, 8.0), Vector2(136.0, 22.0))
+	shield_box.add_child(tag)
+	var row: HBoxContainer = HBoxContainer.new()
+	row.name = "ShieldRow"
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 6)
+	anchor_box(row, Vector2.ZERO, Vector2(176.0, 30.0), Vector2(156.0, 42.0))
+	shield_box.add_child(row)
+	shield_label = make_label("0", 28, SHIELD_COLOR, true)
+	shield_label.name = "Shield"
+	shield_label.size_flags_vertical = Control.SIZE_SHRINK_END
+	shield_label.pivot_offset_ratio = Vector2(0.5, 0.5)
+	row.add_child(shield_label)
+	shield_max_label = make_label("/ 0", 16, COL_WHITE, true)
+	shield_max_label.name = "ShieldMax"
+	shield_max_label.size_flags_vertical = Control.SIZE_SHRINK_END
+	row.add_child(shield_max_label)
+	# Der Balken setzt die schräge Kante des Lebensbalkens nach unten fort.
+	shield_bar = SlantBar.new()
+	shield_bar.name = "ShieldBar"
+	shield_bar.slant = 5.0
+	shield_bar.border = 3.0
+	shield_bar.fill_color = SHIELD_COLOR
+	anchor_box(shield_bar, Vector2.ZERO, Vector2(-5.0, 108.0), Vector2(333.0, 14.0))
+	shield_box.add_child(shield_bar)
+
+
+## Ausweichsprünge: Taste und je Sprung ein Kästchen, rechts neben dem Lebensbalken.
+func _build_dash() -> void:
+	dash_box = Control.new()
+	dash_box.name = "Dash"
+	dash_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	anchor_box(dash_box, Vector2(0.0, 1.0), Vector2(MARGIN + 352.0, -54.0), Vector2(200.0, 32.0))
+	dash_box.visible = false
+	root.add_child(dash_box)
+	var key: Label = make_label(DASH_KEY_TEXT, 20, COL_YELLOW, true)
+	key.name = "DashKey"
+	key.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	anchor_box(key, Vector2.ZERO, Vector2(0.0, 0.0), Vector2(24.0, 32.0))
+	dash_box.add_child(key)
+	dash_pips = Pips.new()
+	dash_pips.name = "DashPips"
+	dash_pips.max_level = 0
+	dash_pips.fill_color = COL_YELLOW
+	dash_pips.pivot_offset_ratio = Vector2(0.0, 0.5)
+	anchor_box(dash_pips, Vector2.ZERO, Vector2(28.0, 9.0), DASH_PIP_SIZE)
+	dash_box.add_child(dash_pips)
+
+
+## Ladungen der Zweiten Staffel: Schriftzug und je Ladung ein Kästchen, über der Sprung-Anzeige.
+func _build_revive() -> void:
+	revive_box = Control.new()
+	revive_box.name = "Revive"
+	revive_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	anchor_box(revive_box, Vector2(0.0, 1.0), Vector2(MARGIN + 352.0, -90.0), Vector2(260.0, 32.0))
+	revive_box.visible = false
+	root.add_child(revive_box)
+	var tag: Label = make_label(REVIVE_TAG_TEXT, 14, REVIVE_COLOR, true)
+	tag.name = "ReviveTag"
+	tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	anchor_box(tag, Vector2.ZERO, Vector2(0.0, 0.0), Vector2(88.0, 32.0))
+	revive_box.add_child(tag)
+	revive_pips = Pips.new()
+	revive_pips.name = "RevivePips"
+	revive_pips.max_level = 0
+	revive_pips.fill_color = REVIVE_COLOR
+	revive_pips.pivot_offset_ratio = Vector2(0.0, 0.5)
+	anchor_box(revive_pips, Vector2.ZERO, Vector2(92.0, 9.0), DASH_PIP_SIZE)
+	revive_box.add_child(revive_pips)
 
 
 func _build_weapon() -> void:
@@ -1180,7 +1387,8 @@ func _build_buff_bar() -> void:
 	var holder: Control = Control.new()
 	holder.name = "BuffBar"
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	anchor_box(holder, Vector2.ZERO, Vector2(MARGIN - 4.0, 132.0), Vector2(BUFF_ROW_SIZE.x, 300.0))
+	var rows_height: float = BUFF_ROW_STEP * float(BUFF_MAX_ROWS)
+	anchor_box(holder, Vector2.ZERO, Vector2(MARGIN - 4.0, 132.0), Vector2(BUFF_ROW_SIZE.x, 24.0 + rows_height))
 	root.add_child(holder)
 	buff_header = make_label("BUFFS · TAB: RUCKSACK", 14, COL_CYAN, true)
 	buff_header.name = "Header"
@@ -1189,7 +1397,7 @@ func _build_buff_bar() -> void:
 	buff_rows = Control.new()
 	buff_rows.name = "Rows"
 	buff_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	anchor_box(buff_rows, Vector2.ZERO, Vector2(0.0, 24.0), Vector2(BUFF_ROW_SIZE.x, 270.0))
+	anchor_box(buff_rows, Vector2.ZERO, Vector2(0.0, 24.0), Vector2(BUFF_ROW_SIZE.x, rows_height))
 	holder.add_child(buff_rows)
 
 
@@ -1251,6 +1459,10 @@ func _connect_events() -> void:
 	Events.zombies_left_changed.connect(_on_zombies_left_changed)
 	Events.player_health_changed.connect(_on_player_health_changed)
 	Events.player_damaged.connect(_on_player_damaged)
+	Events.player_shield_changed.connect(_on_player_shield_changed)
+	Events.dash_charges_changed.connect(_on_dash_charges_changed)
+	Events.revive_charges_changed.connect(_on_revive_charges_changed)
+	Events.cameras_changed.connect(_on_cameras_changed)
 	Events.loadout_changed.connect(_on_loadout_changed)
 	Events.hand_ammo_changed.connect(_on_hand_ammo_changed)
 	Events.weapon_fired.connect(_on_weapon_fired)
@@ -1299,10 +1511,17 @@ func _reset() -> void:
 	_rebuild_buffs()
 
 
-## Holt Leben und Waffen vom Spieler. Ohne Spieler gelten die Startwerte.
+## Holt Leben, Schild, Ausweichsprünge und Waffen vom Spieler. Ohne Spieler gelten die
+## Startwerte (kein Schild, keine Sprünge).
 func _pull_player_state() -> void:
 	var hp: float = Balance.PLAYER_MAX_HP
 	var max_hp: float = Balance.PLAYER_MAX_HP
+	var shield: float = 0.0
+	var max_shield: float = 0.0
+	var charges: int = 0
+	var max_charges: int = 0
+	var revives: int = 0
+	var max_revives: int = 0
 	if is_instance_valid(Game.player):
 		var player: Node3D = Game.player
 		var player_max: Variant = player.get("max_hp")
@@ -1311,7 +1530,30 @@ func _pull_player_state() -> void:
 			max_hp = float(player_max)
 			if player_hp is float or player_hp is int:
 				hp = float(player_hp)
+		var player_max_shield: Variant = player.get("max_shield")
+		var player_shield: Variant = player.get("shield")
+		if (player_max_shield is float or player_max_shield is int) and float(player_max_shield) > 0.0:
+			max_shield = float(player_max_shield)
+			if player_shield is float or player_shield is int:
+				shield = float(player_shield)
+		var player_max_charges: Variant = player.get("max_dash_charges")
+		var player_charges: Variant = player.get("dash_charges")
+		if (player_max_charges is int or player_max_charges is float) and int(player_max_charges) > 0:
+			max_charges = int(player_max_charges)
+			if player_charges is int or player_charges is float:
+				charges = int(player_charges)
+		# Zweite Staffel: Hat der Spieler die Ladungen als Eigenschaften, gelten sie sofort.
+		# Sonst kommt der Stand mit Events.revive_charges_changed.
+		var player_max_revives: Variant = player.get("max_revive_charges")
+		var player_revives: Variant = player.get("revive_charges")
+		if (player_max_revives is int or player_max_revives is float) and int(player_max_revives) > 0:
+			max_revives = int(player_max_revives)
+			if player_revives is int or player_revives is float:
+				revives = int(player_revives)
 	_set_health(hp, max_hp, false)
+	_set_shield(shield, max_shield, false)
+	_set_dash(charges, max_charges, false)
+	_set_revive(revives, max_revives, false)
 	_set_weapon(_read_hands(), false)
 
 
@@ -1503,6 +1745,106 @@ func _set_health(hp: float, max_hp: float, animate: bool) -> void:
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		if ratio - old_ratio >= 0.04:
 			pop(health_label, 1.2, 0.2)
+
+
+# --- Schild und Ausweichsprünge -------------------------------------------------------
+
+func _on_player_shield_changed(shield: float, max_shield: float) -> void:
+	_set_shield(shield, max_shield, true)
+
+
+func _on_dash_charges_changed(charges: int, max_charges: int) -> void:
+	_set_dash(charges, max_charges, true)
+
+
+## Zeigt das Schild: Zahl, Höchstwert und Balken. Ohne Schild (max_shield <= 0) ist die Anzeige aus.
+func _set_shield(shield: float, max_shield: float, animate: bool) -> void:
+	var old_ratio: float = shield_bar.ratio
+	var was_visible: bool = shield_box.visible
+	_max_shield = maxf(max_shield, 0.0)
+	_shield = clampf(shield, 0.0, _max_shield)
+	if _shield_tween != null and _shield_tween.is_valid():
+		_shield_tween.kill()
+	shield_box.visible = _max_shield > 0.0
+	if not shield_box.visible:
+		shield_bar.ratio = 0.0
+		shield_bar.ghost_ratio = 0.0
+		return
+	var ratio: float = _shield / _max_shield
+	# Angebrochene Punkte zählen erst voll, wenn sie geladen sind (beim Leben wird aufgerundet,
+	# weil 0 dort den Tod bedeutet).
+	shield_label.text = str(floori(_shield + 0.001))
+	shield_max_label.text = "/ %d" % roundi(_max_shield)
+	# Ein leeres Schild steht blass da.
+	shield_label.modulate.a = 1.0 if _shield >= 1.0 else 0.55
+	shield_bar.ratio = ratio
+	if animate and was_visible and is_inside_tree() and ratio < old_ratio:
+		# Verlust: Füllung springt, der helle Rest läuft nach (wie beim Leben).
+		shield_bar.ghost_ratio = maxf(shield_bar.ghost_ratio, old_ratio)
+		_shield_tween = create_tween()
+		_shield_tween.tween_interval(0.25)
+		_shield_tween.tween_property(shield_bar, "ghost_ratio", ratio, 0.4)
+		pop(shield_label, 1.3, 0.2)
+	else:
+		shield_bar.ghost_ratio = 0.0
+
+
+## Zeigt die Ausweichsprünge: je Sprung ein Kästchen, gefüllt wenn verfügbar. Ohne Notausgang
+## (max_charges <= 0) ist die Anzeige aus.
+func _set_dash(charges: int, max_charges: int, animate: bool) -> void:
+	var old_charges: int = _dash_charges
+	var was_visible: bool = dash_box.visible
+	_max_dash_charges = maxi(max_charges, 0)
+	_dash_charges = clampi(charges, 0, _max_dash_charges)
+	dash_box.visible = _max_dash_charges > 0
+	dash_pips.max_level = _max_dash_charges
+	dash_pips.level = _dash_charges
+	_layout_abilities()
+	if not dash_box.visible:
+		return
+	var gap: float = maxf(2.0, DASH_PIP_SIZE.y * 0.3)
+	var width: float = DASH_PIP_SIZE.x * float(_max_dash_charges) + gap * float(_max_dash_charges - 1)
+	dash_pips.offset_right = dash_pips.offset_left + width
+	dash_pips.queue_redraw()
+	# Ein Sprung ist wieder da: kurz aufploppen.
+	if animate and was_visible and _dash_charges > old_charges:
+		pop(dash_pips, 1.25, 0.2)
+
+
+func _on_revive_charges_changed(charges: int, max_charges: int) -> void:
+	_set_revive(charges, max_charges, true)
+
+
+## Zeigt die Ladungen der Zweiten Staffel: je Ladung ein Kästchen, gefüllt wenn sie bereit ist.
+## Ohne Zweite Staffel (max_charges <= 0) ist die Anzeige aus.
+func _set_revive(charges: int, max_charges: int, animate: bool) -> void:
+	var old_charges: int = _revive_charges
+	var was_visible: bool = revive_box.visible
+	_max_revive_charges = maxi(max_charges, 0)
+	_revive_charges = clampi(charges, 0, _max_revive_charges)
+	revive_box.visible = _max_revive_charges > 0
+	revive_pips.max_level = _max_revive_charges
+	revive_pips.level = _revive_charges
+	_layout_abilities()
+	if not revive_box.visible:
+		return
+	var gap: float = maxf(2.0, DASH_PIP_SIZE.y * 0.3)
+	var width: float = DASH_PIP_SIZE.x * float(_max_revive_charges) + gap * float(_max_revive_charges - 1)
+	revive_pips.offset_right = revive_pips.offset_left + width
+	revive_pips.queue_redraw()
+	# Ohne bereite Ladung steht der Schriftzug blass da.
+	(revive_box.get_node("ReviveTag") as Label).modulate.a = 1.0 if _revive_charges > 0 else 0.55
+	# Eine Ladung ist wieder da: kurz aufploppen.
+	if animate and was_visible and _revive_charges > old_charges:
+		pop(revive_pips, 1.25, 0.2)
+
+
+## Die Zweite Staffel steht über der Sprung-Anzeige. Ohne Notausgang rückt sie an deren Platz
+## neben den Lebensbalken.
+func _layout_abilities() -> void:
+	var top: float = -90.0 if dash_box.visible else -54.0
+	revive_box.offset_top = top
+	revive_box.offset_bottom = top + 32.0
 
 
 func _tick_vignette(delta: float) -> void:
@@ -1778,6 +2120,11 @@ func _on_build_changed() -> void:
 	_rebuild_buffs()
 
 
+## Game.cameras wurde ersetzt: Die Kamera-Zeilen der Buff-Anzeige stimmen nicht mehr.
+func _on_cameras_changed() -> void:
+	_rebuild_buffs()
+
+
 func _on_synergy_unlocked(synergy_id: String) -> void:
 	_rebuild_buffs()
 	var synergy_name: String = UpgradeDefs.synergy_name(synergy_id)
@@ -1811,18 +2158,49 @@ static func buff_entries(upgrades: UpgradeState) -> Array[Dictionary]:
 	return entries
 
 
-## Baut die Buff-Anzeige aus Game.upgrades neu.
+## Die Kameras im Spiel als Zeilen für die Anzeige, je Kameratyp eine, in der Reihenfolge des
+## Erwerbs. cameras: Game.cameras (ein Eintrag je Exemplar). Je Zeile { "key": "camera_<id>",
+## "id": String, "count": int, "level": int (beste Rarität), "text": "2 × Kameradrohne",
+## "good": true }.
+static func camera_entries(cameras: Array) -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	var by_id: Dictionary = {}
+	for value: Variant in cameras:
+		if not value is Dictionary:
+			continue
+		var camera: Dictionary = value
+		var id: String = str(camera.get("id", ""))
+		if id.is_empty():
+			continue
+		if not by_id.has(id):
+			var fresh: Dictionary = {"key": "camera_" + id, "id": id, "count": 0, "level": 0, "text": "", "good": true}
+			by_id[id] = fresh
+			entries.append(fresh)
+		var entry: Dictionary = by_id[id]
+		entry["count"] = int(entry["count"]) + 1
+		entry["level"] = maxi(int(entry["level"]), int(camera.get("level", 1)))
+	for entry: Dictionary in entries:
+		var display_name: String = entry_name(str(entry["id"]))
+		entry["text"] = display_name if int(entry["count"]) == 1 else "%d × %s" % [int(entry["count"]), display_name]
+	return entries
+
+
+## Baut die Buff-Anzeige neu: Boni aus Game.upgrades, darunter die Kameras aus Game.cameras.
 func _rebuild_buffs() -> void:
 	for child: Node in buff_rows.get_children():
 		buff_rows.remove_child(child)
 		child.queue_free()
 	var entries: Array[Dictionary] = buff_entries(Game.upgrades)
+	entries.append_array(camera_entries(Game.cameras))
 	buff_header.visible = true
 	var index: int = 0
 	for entry: Dictionary in entries:
 		var key: String = str(entry["key"])
 		var is_synergy: bool = key.begins_with("synergy_")
+		var is_camera: bool = key.begins_with("camera_")
 		var color: Color = COL_YELLOW if is_synergy else (COL_GREEN if bool(entry["good"]) else COL_ORANGE)
+		if is_camera:
+			color = CAMERA_ROW_COLOR
 		var row: Control = Control.new()
 		row.name = "Buff_%s" % key
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1833,14 +2211,37 @@ func _rebuild_buffs() -> void:
 		plate.name = "Plate"
 		plate.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		row.add_child(plate)
-		var label: Label = make_label(str(entry["text"]).to_upper() if is_synergy else str(entry["text"]), 15, color, is_synergy)
+		var text: String = str(entry["text"]).to_upper() if is_synergy else str(entry["text"])
+		var text_left: float = 12.0
+		if is_camera:
+			# Kameras zeigen ihr Bild vor dem Namen: So heben sie sich von den Boni ab.
+			var icon: Control = _make_camera_icon(str(entry["id"]))
+			anchor_box(icon, Vector2.ZERO, Vector2(8.0, 4.0), Vector2(20.0, 20.0))
+			row.add_child(icon)
+			text_left = 34.0
+		var text_width: float = BUFF_ROW_SIZE.x - text_left - 8.0
+		var label: Label = make_label(text, fit_font_size(text, 15, text_width - 4.0, is_synergy, 11), color, is_synergy)
 		label.name = "Text"
 		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		label.clip_text = true
-		anchor_box(label, Vector2.ZERO, Vector2(12.0, 0.0), Vector2(BUFF_ROW_SIZE.x - 20.0, BUFF_ROW_SIZE.y))
+		anchor_box(label, Vector2.ZERO, Vector2(text_left, 0.0), Vector2(text_width, BUFF_ROW_SIZE.y))
 		row.add_child(label)
 		buff_rows.add_child(row)
 		index += 1
+
+
+## Kleines Bild einer Kamera: das gezeichnete Symbol, sonst ihre Form im Rucksack.
+func _make_camera_icon(camera_id: String) -> Control:
+	if has_icon(camera_id):
+		var icon: UpgradeIcon = UpgradeIcon.new()
+		icon.name = "Icon"
+		icon.icon_id = camera_id
+		return icon
+	var shape: ItemShape = ItemShape.new()
+	shape.name = "Icon"
+	shape.item_id = camera_id
+	shape.max_cell = 9.0
+	return shape
 
 
 # --- Banner ---------------------------------------------------------------------------

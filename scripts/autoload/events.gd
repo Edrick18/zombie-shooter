@@ -67,6 +67,43 @@ signal hand_ammo_changed(hand: int, mag: int, magazine_size: int)
 ## Eine Hand lädt nach (duration in Sekunden) bzw. ist damit fertig.
 signal hand_reload_started(hand: int, duration: float)
 signal hand_reload_finished(hand: int)
+## Schild des Spielers (Sicherheitsglas) hat sich geändert. max_shield 0 = kein Schild.
+signal player_shield_changed(shield: float, max_shield: float)
+## Ausweichsprünge (Notausgang): verfügbare und höchstens mögliche Sprünge. max_charges 0 = keiner.
+signal dash_charges_changed(charges: int, max_charges: int)
+## Der Spieler hat einen Ausweichsprung gemacht.
+signal player_dashed
+## Eine Explosion an dieser Stelle (Rakete, Konfetti-Kanone), auch wenn sie niemanden trifft.
+## Nur für Ton und Anzeige: Der Schaden läuft wie bisher über take_damage.
+signal explosion(position: Vector3, radius: float)
+# --- Abschnitt 22 ---
+## Game.cameras hat sich geändert (Kamera oder Kamera-Gegenstand eingeräumt, verschoben, verkauft).
+## Kommt in sync_build vor build_changed, und nur, wenn sich die Liste wirklich geändert hat.
+@warning_ignore("unused_signal")
+signal cameras_changed
+## Eine Kamera hat geschossen, geblitzt oder markiert. camera_id: Kameratyp aus CameraDefs,
+## position: Ort der Kamera. Nur für Ton und Anzeige, gesendet vom Kamera-Knoten.
+@warning_ignore("unused_signal")
+signal camera_fired(camera_id: String, position: Vector3)
+## Die Requisitenbombe hat eine Mine gelegt bzw. eine Mine wurde ausgelöst (kurz vor ihrer
+## Explosion, die zusätzlich als explosion(position, radius) kommt).
+@warning_ignore("unused_signal")
+signal mine_placed(position: Vector3)
+@warning_ignore("unused_signal")
+signal mine_triggered(position: Vector3)
+## Die Zweite Staffel hat einen tödlichen Treffer abgefangen: Der Spieler steht wieder.
+@warning_ignore("unused_signal")
+signal player_revived
+## Ladungen der Zweiten Staffel: bereit / im Rucksack (0 / 0 = kein Exemplar).
+@warning_ignore("unused_signal")
+signal revive_charges_changed(charges: int, max_charges: int)
+## Das Konto hat sich geändert (Abschnitt 22.5). bank: neuer Stand, gained: Änderung (am Laufende
+## die verdienten Punkte, auch 0, beim Kauf eines Pakets der negative Preis).
+@warning_ignore("unused_signal")
+signal bank_changed(bank: int, gained: int)
+## Ein Paket wurde gekauft: Sein Inhalt kann ab jetzt in Kisten liegen.
+@warning_ignore("unused_signal")
+signal pack_unlocked(pack_id: String)
 ## "" = keine Anzeige.
 @warning_ignore("unused_signal")
 signal interact_prompt_changed(text: String)

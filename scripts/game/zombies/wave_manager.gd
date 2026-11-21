@@ -87,7 +87,7 @@ func _process(delta: float) -> void:
 	if not _queue.is_empty():
 		_spawn_timer -= delta
 		if _spawn_timer <= 0.0:
-			if _alive_count() < Balance.MAX_ZOMBIES_ALIVE:
+			if _alive_count() < WavePlan.max_alive(current_wave):
 				_spawn_next()
 			else:
 				# Obergrenze erreicht: Sobald Platz ist, kommt genau einer nach, kein Schwall.

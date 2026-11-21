@@ -78,15 +78,38 @@ static func walker_speed(wave: int) -> float:
 	return minf(Balance.WALKER_SPEED_MAX, Balance.WALKER_SPEED_START + Balance.WALKER_SPEED_PER_WAVE * float(w - 1))
 
 
-## Sekunden zwischen zwei Spawns: max(0.4, 1.5 - 0.1 * Welle).
+## Sekunden zwischen zwei Spawns: max(0.4, 1.5 - 0.1 * Welle) bis Welle 11, danach je Welle
+## 0,02 s kürzer bis zum Boden von 0,15 s.
 static func spawn_interval(wave: int) -> float:
 	var w: int = maxi(wave, 1)
-	return maxf(Balance.SPAWN_INTERVAL_MIN, Balance.SPAWN_INTERVAL_BASE - Balance.SPAWN_INTERVAL_PER_WAVE * float(w))
+	var interval: float = maxf(Balance.SPAWN_INTERVAL_MIN, Balance.SPAWN_INTERVAL_BASE - Balance.SPAWN_INTERVAL_PER_WAVE * float(w))
+	if w > Balance.SPAWN_INTERVAL_LATE_FROM_WAVE:
+		interval -= Balance.SPAWN_INTERVAL_LATE_PER_WAVE * float(w - Balance.SPAWN_INTERVAL_LATE_FROM_WAVE)
+	return maxf(Balance.SPAWN_INTERVAL_FLOOR, interval)
 
 
-## Effekt-Faktor für feste Schadenswerte der Upgrades: 0.75 * Lebens-Faktor, mindestens 1.
+## So viele Zombies dürfen in dieser Welle gleichzeitig leben: 24 bis Welle 10, danach je Welle
+## 2 mehr, höchstens 48.
+static func max_alive(wave: int) -> int:
+	var late_waves: int = maxi(0, maxi(wave, 1) - Balance.HP_FACTOR_LINEAR_UNTIL_WAVE)
+	return mini(Balance.MAX_ZOMBIES_ALIVE_CAP, Balance.MAX_ZOMBIES_ALIVE + Balance.MAX_ZOMBIES_ALIVE_PER_LATE_WAVE * late_waves)
+
+
+## Faktor auf den Schaden der Zombies: 1,0 bis Welle 5, danach je Welle 5 % mehr.
+static func damage_factor(wave: int) -> float:
+	return 1.0 + Balance.ZOMBIE_DAMAGE_PER_WAVE * float(maxi(0, maxi(wave, 1) - Balance.ZOMBIE_DAMAGE_FROM_WAVE))
+
+
+## Effekt-Faktor für feste Schadenswerte der Upgrades: bis Welle 10 0,75 mal Lebens-Faktor
+## (mindestens 1), danach je Welle mal 1,04. Das Leben der Zombies wächst dann je Welle mal 1,1:
+## Feste Schadenswerte fallen in späten Wellen also zurück.
 static func effect_factor(wave: int) -> float:
-	return maxf(Balance.EFFECT_FACTOR_MIN, Balance.EFFECT_FACTOR_SHARE * hp_factor(wave))
+	var w: int = maxi(wave, 1)
+	var linear_wave: int = mini(w, Balance.HP_FACTOR_LINEAR_UNTIL_WAVE)
+	var factor: float = Balance.EFFECT_FACTOR_SHARE * hp_factor(linear_wave)
+	if w > Balance.HP_FACTOR_LINEAR_UNTIL_WAVE:
+		factor *= pow(Balance.EFFECT_FACTOR_LATE_MULTIPLIER, float(w - Balance.HP_FACTOR_LINEAR_UNTIL_WAVE))
+	return maxf(Balance.EFFECT_FACTOR_MIN, factor)
 
 
 ## Maximal-Leben eines Zombies dieses Typs in dieser Welle (Grundwert mal Lebens-Faktor).
@@ -98,17 +121,22 @@ static func zombie_hp(type: String, wave: int) -> float:
 static func zombie_speed(type: String, wave: int) -> float:
 	if type == TYPE_WALKER:
 		return walker_speed(wave)
-	return float(_type_def(type)["speed"])
+	var speed: float = float(_type_def(type)["speed"])
+	if type == TYPE_SPRINTER:
+		# Sprinter legen ab Welle 10 je Welle etwas zu.
+		var late_waves: int = maxi(0, maxi(wave, 1) - Balance.HP_FACTOR_LINEAR_UNTIL_WAVE)
+		speed = minf(Balance.SPRINTER_SPEED_MAX, speed + Balance.SPRINTER_SPEED_PER_LATE_WAVE * float(late_waves))
+	return speed
 
 
-## Schaden eines Schlags dieses Zombie-Typs (wächst nicht mit der Welle).
-static func zombie_damage(type: String) -> float:
-	return float(_type_def(type)["damage"])
+## Schaden eines Schlags dieses Zombie-Typs in dieser Welle (Grundwert mal damage_factor).
+static func zombie_damage(type: String, wave: int = 1) -> float:
+	return float(_type_def(type)["damage"]) * damage_factor(wave)
 
 
 ## Alles Wichtige einer Welle in einem Dictionary mit den Schlüsseln:
 ## wave (int), spawns (Array[String]), total (int), hp_factor (float), walker_speed (float),
-## spawn_interval (float), effect_factor (float).
+## spawn_interval (float), effect_factor (float), max_alive (int), damage_factor (float).
 static func plan(wave: int) -> Dictionary:
 	var w: int = maxi(wave, 1)
 	var spawns: Array[String] = spawn_list(w)
@@ -120,6 +148,8 @@ static func plan(wave: int) -> Dictionary:
 		"walker_speed": walker_speed(w),
 		"spawn_interval": spawn_interval(w),
 		"effect_factor": effect_factor(w),
+		"max_alive": max_alive(w),
+		"damage_factor": damage_factor(w),
 	}
 
 

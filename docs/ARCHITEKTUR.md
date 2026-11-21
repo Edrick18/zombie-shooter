@@ -12,7 +12,7 @@ lassen **Kisten** fallen. Wer eine Kiste aufsammelt, wählt **1 aus 3 Upgrades**
 Spieler und gelten für jede Waffe. So entstehen Builds.
 
 Nicht im Prototyp: Perk-Automaten, Glücksrad, Händler, Bosswelle, Moderator-Sprüche, Meta-Progression,
-Ton, echte 3D-Modelle (alles Platzhalter aus einfachen Formen).
+echte 3D-Modelle (alles Platzhalter aus einfachen Formen). Ton gibt es seit Abschnitt 21.
 
 ## 2. Technik und Regeln für den Code
 
@@ -1240,7 +1240,7 @@ Kauf den Munitionspreis).
   nach der Wahl einmal.
 - Das Publikum ist nur durch die Brüstung (1,1 m) vor Zombies geschützt.
 - Requisiten im Raum stehen an festen Stellen. Wer `ZONE1_SIZE` oder `ZONE2_SIZE` ändert, muss sie nachziehen.
-- Es gibt keinen Ton und kein Hauptmenü (das Spiel startet sofort).
+- Es gibt kein Hauptmenü (das Spiel startet mit der Kandidatenwahl). Ton: siehe Abschnitt 21.
 
 ## 15. Ruckler, Vorwärmen und Einstellungen (Stand 2026-11-20)
 
@@ -1592,3 +1592,869 @@ Waffen (Zahlen in `weapon_defs.gd`, DPS ohne Nachladen):
 Offen und bekannt: Zwei Maschinenpistolen beidhändig machen mehr Schaden je Sekunde (384) als jede
 Zweihand-Waffe. Wand-Silhouetten gibt es nur für Schrotflinte und Maschinenpistole. Die Balance
 ist nach dem Umbau nicht neu gemessen.
+
+## 19. Zwölf neue Gegenstände (Stand 2026-11-21)
+
+Elf davon sind Upgrade-Gegenstände: Sie stehen mit Werten je Rarität in `UpgradeDefs.UPGRADES`
+(Liste `UpgradeDefs.ITEM_ONLY`, nicht in `ORDER`) und mit Form und Sternen in `ItemDefs`. Der zwölfte,
+die Wiederholung, ist ein Verstärker, dessen Stern auf Gegenstände zielt. Der Kern (Tabellen, Sterne,
+mehrfache Wirkung, Kisten) ist fertig und in `tests/test_backpack.gd` getestet.
+
+### 19.1 Für die Waffe auf den Sternen
+
+Diese Werte gelten je Waffe. Gelesen werden sie mit `Game.bullet_value(weapon_uid, id, key)`, ob der
+Gegenstand für die Waffe wirkt, sagt `Game.bullet_level(weapon_uid, id) > 0`.
+
+| ID | Name | Schlüssel und Regel |
+|---|---|---|
+| `extra_shot` | Zugabe | `shots` zusätzliche Kugeln je Schuss (bei Schrot je Schuss, nicht je Schrotkugel), jede mit dem Anteil `damage_factor` am Kugelschaden. Die Zusatzkugel fliegt leicht versetzt. Beim Raketenwerfer ist es eine zweite Rakete. In `info` steht `"extra": true`. |
+| `poison` | Kantinenessen | Jeder Kugeltreffer vergiftet für `Balance.POISON_DURATION` Sekunden (ein weiterer Treffer stellt die Zeit neu). `dps` Schaden je Sekunde mal `Game.effect_factor()`, Quelle `"poison"`. |
+| `crit` | Glücksrad | Je Kugel mit `chance` ein kritischer Treffer: Schaden mal `Balance.CRIT_MULTIPLIER`. Zufall aus `Game.rng`. In `info` steht `"crit": true`. |
+| `big_mag` | Überlänge | Magazin = Grundgröße mal (1 + `bonus`), aufgerundet. |
+| `scope` | Teleprompter | Streuung mal `Balance.SCOPE_SPREAD_FACTOR`, Kopfschuss-Schaden mal (1 + `headshot_bonus`). |
+| `fire_rate` | Schnelldurchlauf | Schussfolge durch (1 + `bonus`). |
+
+### 19.2 Für den Spieler als Ganzes
+
+Gelesen mit `Game.upgrades.value(id, key)` (alle Exemplare zusammen) oder `Game.upgrades.copies(id)`
+(Rarität je Exemplar).
+
+| ID | Name | Schlüssel und Regel |
+|---|---|---|
+| `shield` | Sicherheitsglas | Schild mit `amount` Punkten. Schaden trifft zuerst das Schild. Nach `Balance.SHIELD_RECHARGE_DELAY` Sekunden ohne Schaden lädt es mit `SHIELD_RECHARGE_RATE` je Sekunde. Signal `player_shield_changed(shield, max_shield)`. |
+| `kill_heal` | Trostpflaster | Jeder Kill (gleich welche Quelle) heilt `heal` Leben. |
+| `disco_ball` | Discokugel | Je Exemplar eine eigene Kugel, die im Abstand `Balance.DISCO_ORBIT_RADIUS` um den Spieler kreist. Sie macht `damage` mal `Game.effect_factor()` an Zombies im Abstand `DISCO_HIT_RADIUS`, am selben Zombie höchstens alle `DISCO_HIT_INTERVAL` Sekunden, Quelle `"disco"`. |
+| `jammer` | Störsender | Alle `Balance.JAMMER_INTERVAL` Sekunden `damage` mal `Game.effect_factor()` an allen Zombies im Umkreis `radius`, Quelle `"jammer"`. Ohne Zombie im Umkreis verfällt der Schlag nicht: Er löst aus, sobald einer da ist. |
+| `dash` | Notausgang | Aktion `dash` (Taste Q): Ausweichsprung in Laufrichtung (ohne Richtung nach vorn) mit `Balance.DASH_SPEED` für `DASH_TIME`. `charges` Sprünge, jeder lädt in `cooldown` Sekunden nach. Während des Sprungs nimmt der Spieler keinen Schaden. Signale `dash_charges_changed(charges, max_charges)` und `player_dashed`. |
+
+### 19.3 Wiederholung
+
+`replay` (Verstärker, nur in Gold-Kisten): Sein Stern zielt auf einen Upgrade-Gegenstand
+(`ItemDefs.STAR_ITEM`, `ItemDefs.star_hits`). Der Gegenstand zählt dann ein weiteres Mal, das zweite
+Mal höchstens in der Rarität der Wiederholung (`BackpackState.copy_levels`). Das gilt auch für
+Kugel-Effekte (die Waffe bekommt sie doppelt), Drohnen und Discokugeln (eine mehr). Auf Waffen,
+Verstärker und andere Wiederholungen wirkt sie nicht.
+
+### 19.4 Sternmuster (ungedreht)
+
+`extra_shot` zwei Felder in einer Linie vor der Form, `poison` die vier Ecken, `crit` links und
+rechts, `big_mag` über und unter beiden Feldern, `scope` ein Feld in der Innenecke, `fire_rate` ein
+Ring aus sechs Feldern, `replay` ein Feld rechts daneben.
+
+Die Taste für den Ausweichsprung ist Q und nicht die linke Alt-Taste: Alt zusammen mit der
+Leertaste (Springen) öffnet unter Windows das Fenstermenü.
+
+### 19.5 Stand nach dem Zusammenbau (2026-11-21)
+
+Alle zwölf Gegenstände sind gebaut und getestet. Neue öffentliche Teile der Module:
+
+- `player.gd`: `shield`, `max_shield`, `dash_charges`, `max_dash_charges`, `try_dash() -> bool`,
+  `is_dashing()`, `is_invulnerable()`. Ein neues Schild und neue Sprung-Ladungen kommen leer an
+  und laden dann normal auf (sonst wäre Ein- und Ausräumen im Rucksack eine Gratis-Heilung).
+- `upgrade_effects.gd`: Listen `drones` und `disco_balls` (ein Knoten je Exemplar),
+  `get_jammer_time_left()`. Gift, Brand und Kettenblitz lesen ihre Werte je Waffe über
+  `info["weapon_uid"]`.
+- `disco_ball.gd` (neu): `set_level`, `set_slot(index, total)`, `get_hit_damage()`, `tick(delta, base_angle)`.
+- `zombie.gd`: `apply_poison(dps, duration)`, `is_poisoned()`.
+- `weapon_controller.gd`: Treffer-`info` trägt zusätzlich `extra` (Zusatzkugel) und `crit`.
+- `hud.gd`: Schild-Anzeige (`shield_box`, `shield_label`, `shield_max_label`, `shield_bar`) und
+  Sprung-Anzeige (`dash_box`, `dash_pips`), beide nur sichtbar, wenn der Gegenstand im Rucksack liegt.
+
+Mit echter Grafik angesehen: Discokugel, Gift-Färbung, Störsender-Blitz, Schild- und Sprung-Anzeige,
+Sternmuster im Rucksack. `tests/perf_game.gd` misst die neuen Gegenstände mit (Abschnitt „Gift,
+Brand, Störsender, Discokugel, Schild“): 0 Bilder über 25 ms. Mit `-- trace` druckt die Messung zu
+jedem langen Bild die Signale, die davor kamen.
+
+## 20. Balance der späten Wellen und der Begleiter (Stand 2026-11-21)
+
+Anlass: Mit zehn Kamera-Drohnen war der Spieler ab etwa Welle 30 unbesiegbar.
+
+Ursachen:
+
+1. Der Schaden von Drohne, Discokugel, Störsender, Gift, Brand, Blitz und Explosion wird mit
+   `Game.effect_factor()` multipliziert. Dieser Faktor wuchs ohne Ende mit 75 % des Zombie-Lebens
+   mit. Die Zombies wurden gegen diese Effekte also nie zäher.
+2. Jedes Exemplar einer Drohne war eine volle, unabhängige Drohne. Zehn Drohnen = zehnfacher Schaden.
+3. Der Druck der Gegner war ab Welle 11 gedeckelt: höchstens 24 Zombies gleichzeitig, ein Zombie
+   alle 0,4 s, Schaden und Tempo gleich wie in Welle 1.
+
+Änderungen (alle Zahlen in `balance.gd`, Formeln in `wave_plan.gd`):
+
+| Was | Vorher | Jetzt |
+|---|---|---|
+| `WavePlan.effect_factor(wave)` | 0,75 × Lebens-Faktor, ohne Grenze | bis Welle 10 wie vorher, danach nur noch × `EFFECT_FACTOR_LATE_MULTIPLIER` (1,04) je Welle. Das Leben wächst weiter × 1,1. |
+| Mehrere Drohnen oder Discokugeln | jede voll | jede macht den Anteil `UpgradeDefs.companion_factor(n)` = 1 / n^`COMPANION_STACK_EXPONENT` (0,5). Zwei zusammen 1,41-fach, vier 2-fach, zehn 3,16-fach. |
+| `WavePlan.max_alive(wave)` | fest 24 | 24 bis Welle 10, danach +`MAX_ZOMBIES_ALIVE_PER_LATE_WAVE` (2) je Welle bis `MAX_ZOMBIES_ALIVE_CAP` (48) |
+| `WavePlan.spawn_interval(wave)` | Untergrenze 0,4 s | ab `SPAWN_INTERVAL_LATE_FROM_WAVE` (11) weitere −0,02 s je Welle bis `SPAWN_INTERVAL_FLOOR` (0,15 s) |
+| `WavePlan.damage_factor(wave)` | immer 1 | 1 + `ZOMBIE_DAMAGE_PER_WAVE` (0,05) je Welle ab `ZOMBIE_DAMAGE_FROM_WAVE` (5). `WavePlan.zombie_damage(type, wave)` rechnet ihn ein. |
+| Sprinter-Tempo | fest | nach Welle 10 +`SPRINTER_SPEED_PER_LATE_WAVE` (0,05 m/s) je Welle bis `SPRINTER_SPEED_MAX` (6,4) |
+
+`WavePlan.plan()` hat dadurch neun Schlüssel (neu `max_alive`, `damage_factor`). `wave_manager.gd`
+liest `WavePlan.max_alive`, `zombie.gd` liest `WavePlan.zombie_damage`. `drone.gd` und
+`disco_ball.gd` multiplizieren ihren Schaden mit `companion_factor` der Zahl ihrer Geschwister.
+
+Gerechnet, nicht gespielt: Zehn legendäre Drohnen schaffen in Welle 33 etwa 0,65 Walker je Sekunde,
+während bis zu 6,7 je Sekunde erscheinen. Ob sich das im Spiel richtig anfühlt, muss ein Probelauf
+zeigen. Stellschrauben sind die Zahlen oben.
+
+Bekannt offen: Zwei Quotenhammer (SMG) in beiden Händen sind stärker als jede Zweihandwaffe.
+
+## 21. Ton (Stand 2026-11-21)
+
+- `scripts/game/audio/sfx.gd`: ein Knoten, den `main.gd` als Kind `Sfx` anlegt. Er hört nur auf
+  `Events` und auf Knöpfe, ändert nichts am Spiel und benutzt nie `Game.rng`. Öffentlich:
+  `play(id, volume_db := 0.0)`, `play_at(id, position, volume_db := 0.0)`, `has_sound(id)`,
+  `get_play_count(id)`, `sound_ids()`, `playback_enabled`. Welches Signal welches Geräusch auslöst,
+  steht im Kopf der Datei, Lautstärke, Tonhöhen-Streuung und Mindestabstand je Geräusch in der
+  Tabelle `SOUNDS`.
+- Zwei Vorräte von Spielern: 16 ohne Ort (Schüsse, Treffer, Menü, Fanfaren) und 12 mit Ort in der
+  Welt (Stöhnen, Tod, Explosion, Blitz, Kiste, Drohne). Eigener Bus `Sfx` unter `Master`.
+  `process_mode` ALWAYS, damit Menü-Geräusche auch in der Pause erklingen.
+- 40 WAV-Dateien in `audio/` (16 Bit, Mono, 44100 Hz), alle berechnet von `tools/make_sounds.py`
+  (kein fremdes Material). Ersetzen durch echte Aufnahmen: Datei mit gleichem Namen ablegen, siehe
+  `audio/LIESMICH.txt`. Fehlt eine Datei, bleibt nur dieses Geräusch stumm.
+- Neues Signal `Events.explosion(position, radius)`: gesendet von `weapon_controller._explode` und
+  `upgrade_effects._explode`, damit auch eine Rakete in die Wand zu hören ist. `Events` hat damit
+  36 Signale.
+- Einstellung `master_volume` (0 bis 1, Standard 0,8, Abschnitt `ton` in `user://settings.cfg`),
+  Regler „Lautstärke“ im Einstellungsmenü, `Settings.apply_audio()` setzt den Master-Bus.
+- Headless (Tests) startet kein Spieler, die Starts werden nur gezählt (`get_play_count`). Sonst
+  endet ein Test oft mitten in einem Geräusch, und Godot meldet verlorene Objekte.
+  `tests/test_audio.gd` schaltet `playback_enabled` selbst ein und wartet am Ende.
+- Geprüft sind die Dateien nur in Zahlen (Länge, Pegel) und die Auslöser im Test. Angehört hat sie
+  noch niemand: Lautstärken stehen in `SOUNDS` und sind nach dem ersten Probehören nachzustellen.
+
+## 22. Ausbau 3: Kameras mit festen Werten, neue Waffen und Gegenstände, größeres Studio, Freischalten (Stand 2026-11-21)
+
+Vom Nutzer entschieden: Kameras haben feste Werte und werden über Gegenstände stärker. Es gibt
+mehrere Kameratypen, mehr Waffen, mehr Gegenstände. Die Wandwaffen entfallen (man konnte Waffen zu
+schnell auf Legendär kaufen). Das Studio wird größer und bekommt mehr kaufbare Räume. Mit Punkten
+schaltet man zwischen den Läufen Pakete mit 3 bis 5 Gegenständen oder Waffen frei, die danach in
+Kisten liegen können.
+
+Dieser Abschnitt legt Regeln und Zahlen fest. Die genauen Schnittstellen trägt der Kern in 22.7 nach.
+
+### 22.1 Kameras
+
+- Eine Kamera ist ein Gegenstand der neuen Art `camera`. Jedes eingeräumte Exemplar ist ein eigener
+  Knoten im Spiel (eine Wiederholung auf ihrem Stern macht ein zweites Exemplar, wie bisher).
+- **Feste Werte je Rarität.** Kein `Game.effect_factor()`, kein `companion_factor` mehr für
+  Kameras. (Discokugel, Störsender, Gift, Brand, Blitz, Explosion bleiben, wie sie sind.)
+- Werte stehen in der neuen Datei `scripts/core/camera_defs.gd`. `"drone"` bleibt die ID der
+  Kameradrohne.
+
+| ID | Name | Regel | Werte Gewöhnlich bis Legendär |
+|---|---|---|---|
+| `drone` | Kameradrohne | Einzelschuss auf den nächsten Zombie mit Sichtlinie | Schaden 15/21/28/36/46, Abstand 1,2/1,0/0,8/0,65/0,5 s, Reichweite 15 m |
+| `cam_tele` | Tele-Kamera | seltener, starker Schuss, geht durch weitere Zombies in der Linie | Schaden 70/100/135/175/220, Abstand 3,2/2,9/2,6/2,3/2,0 s, Reichweite 30 m, Durchschlag 1/1/2/2/3 |
+| `cam_flash` | Blitzlicht-Kamera | Blitz trifft alle Zombies in einem Kegel von 90 Grad vor der Kamera (sie dreht sich zum nächsten Zombie) | Schaden 18/25/33/42/52, Abstand 3,0/2,8/2,6/2,4/2,2 s, Reichweite 7 m |
+| `cam_slow` | Zeitlupen-Kamera | Treffer verlangsamt den Zombie für 2 s (Elite: halbe Wirkung) | Schaden 4/6/8/10/12, Abstand 1,5/1,4/1,3/1,2/1,1 s, Reichweite 12 m, Verlangsamung 30/35/40/45/50 % |
+| `cam_director` | Regie-Kamera | markiert einen Zombie für 4 s (zuerst Elite, dann unmarkierte), kein Schaden. Markierte nehmen aus jeder Quelle mehr Schaden | Abstand 3,0/2,7/2,4/2,1/1,8 s, Reichweite 18 m, Mehr-Schaden 20/25/30/40/50 % |
+
+Mehrere Verlangsamungen oder Markierungen addieren sich nicht: Es gilt die stärkste, die Zeit wird
+neu gestellt.
+
+Kamera-Gegenstände (Art `upgrade`, Sterne zielen auf Kameras: `ItemDefs.STAR_CAMERA`). Mehrere
+Exemplare auf derselben Kamera addieren sich.
+
+| ID | Name | Wirkung auf die Kamera auf den Sternen | Werte |
+|---|---|---|---|
+| `cam_lens` | Großes Objektiv | mehr Schaden | +20/30/40/55/70 % |
+| `cam_zoom` | Zoom | mehr Reichweite | +20/30/40/50/60 % |
+| `cam_battery` | Akkupack | schnellere Schussfolge (Abstand durch 1 + Bonus) | +15/25/35/45/60 % |
+| `cam_second` | Zweitkamera | jeder Schuss trifft ein zweites Ziel mit einem Anteil der Wirkung (Blitzlicht: zweiter Blitz 0,4 s später mit dem Anteil) | 40/55/70/85/100 % |
+| `cam_uplink` | Sendeleitung | ohne Sterne: alle Kameras mehr Schaden und schnellere Schussfolge | +8/12/16/20/25 % |
+
+Die fertigen Werte einer Kamera rechnet der Kern aus (reine Funktion, testbar), das Spiel liest sie
+nur.
+
+### 22.2 Neue Waffen (zehn, zusammen 19)
+
+Neue Felder in `WeaponDefs` (alle mit Standardwert, alte Waffen bleiben unverändert): `mode`
+(`"bullet"` Standard, `"grenade"`, `"flame"`, `"beam"`), `burst` (Schüsse je Abzug, Standard 1),
+`pierce` (durchschlägt so viele weitere Zombies, Standard 0), `arc_jumps` und `arc_factor`
+(eingebauter Blitz auf weitere Zombies), `range` (m, nur `flame`).
+
+| ID | Name | Hände | Werte |
+|---|---|---|---|
+| `burst_pistol` | Dreierpack | 1 | Schaden 22, Salve aus 3 Schüssen (0,07 s Abstand), 2,2 Salven/s, Magazin 15, Nachladen 1,4 s, Streuung 1,0 |
+| `nail_gun` | Bühnenbau | 1 | Schaden 9, 14 Schuss/s, Dauerfeuer, Magazin 40, Nachladen 1,6 s, Streuung 2,2, Durchschlag 1 |
+| `machine_pistol` | Werbeblock | 1 | Schaden 11, 18 Schuss/s, Dauerfeuer, Magazin 20, Nachladen 1,2 s, Streuung 3,0 |
+| `crossbow` | Zielgerade | 1 | Schaden 110, 1,1 Schuss/s, Magazin 1, Nachladen 1,3 s, Streuung 0, Durchschlag 3 |
+| `grenade_launcher` | Knalleffekt | 1 | Granate im Bogen (Schwerkraft), Treffer 60, Explosion 110 im Radius 3,0 m, 1 Schuss/s, Magazin 4, Nachladen 2,8 s |
+| `flamethrower` | Heiße Phase | 2 | Kegel bis 7 m, 15 Stöße/s mit Schaden 9 an allen Zombies im Kegel, setzt in Brand (8 Schaden/s für 3 s), Magazin 100, Nachladen 3,0 s, Dauerfeuer |
+| `beam` | Rotlicht | 2 | Dauerstrahl: 20 Treffer/s mit Schaden 9, geht durch alle Zombies in der Linie, Magazin 80, Nachladen 2,6 s, Streuung 0 |
+| `tesla` | Kurzschluss | 2 | Schaden 45, 3 Schuss/s, jeder Treffer springt auf 3 weitere Zombies im Umkreis von 5 m mit 60 %, Magazin 12, Nachladen 2,4 s |
+| `lmg` | Marathonsendung | 2 | Schaden 20, 11 Schuss/s, Dauerfeuer, Magazin 100, Nachladen 4,5 s, Streuung 2,0 |
+| `auto_shotgun` | Zuschauerfrage | 2 | Schaden 11, 7 Schrotkugeln, 3 Schuss/s, Dauerfeuer, Magazin 8, Nachladen 2,6 s, Streuung 6,5 |
+
+Gegenstände auf der Waffe (Blitz, Brand, Gift, Glücksrad und so weiter) wirken bei jedem Treffer
+auch für Flammen und Strahl. Die Wandwaffen entfallen ganz: Waffen gibt es aus Kisten und als
+Startwaffe des Kandidaten. `WeaponDefs.price` bleibt als Zahl stehen (für einen späteren Händler),
+wird aber nirgends mehr benutzt.
+
+### 22.3 Neue Gegenstände (acht, dazu vier Kameras und fünf Kamera-Gegenstände)
+
+Für die Waffe auf den Sternen (wie in 19.1, gelesen mit `Game.bullet_value(weapon_uid, id, key)`):
+
+| ID | Name | Regel | Werte |
+|---|---|---|---|
+| `frost` | Trockeneis | Kugeltreffer verlangsamt den Zombie für 2 s (Elite: halbe Wirkung) | `slow` 20/25/30/35/40 % |
+| `opener` | Eröffnungsgag | die erste Kugel jedes Magazins macht mehr Schaden | `bonus` +100/150/200/275/350 % |
+| `punchline` | Schlusspointe | die letzte Kugel jedes Magazins explodiert am Einschlag, Radius 3 m, Schaden mal `Game.effect_factor()`, Quelle `"explosion"` | `damage` 60/90/120/160/200 |
+| `ricochet` | Querschläger | ein Kugeltreffer springt mit `chance` auf einen weiteren Zombie im Umkreis von 6 m, mit 60 % des Schadens | `chance` 20/30/40/50/60 % |
+
+Für den Spieler als Ganzes:
+
+| ID | Name | Regel | Werte |
+|---|---|---|---|
+| `thorns` | Kaktus-Requisite | trifft ein Zombie den Spieler, nehmen alle Zombies im Umkreis von 2,5 m Schaden mal `Game.effect_factor()`, Quelle `"thorns"` | `damage` 40/60/80/110/140 |
+| `revive` | Zweite Staffel | ein tödlicher Treffer tötet nicht: 30 % Leben, 1,5 s unverwundbar, Druckwelle. Jedes Exemplar ist eine Ladung, die nach `waves` geschafften Wellen wiederkommt | `waves` 5/4/4/3/3 |
+| `snack` | Pausensnack | am Wellenende zusätzliche Heilung | `heal` 10/15/20/25/35 |
+| `mine` | Requisitenbombe | legt alle `interval` s eine Mine an die Füße des Spielers (höchstens 5 zugleich). Kommt ein Zombie auf 1,2 m heran, explodiert sie: Radius 3 m, Schaden mal `Game.effect_factor()`, Quelle `"mine"` | `interval` 8/7/6/5/4 s, `damage` 70/100/130/170/220 |
+
+### 22.4 Größeres Studio, mehr Räume
+
+- Die Bühne (Zone 1) wird in der Fläche etwa 40 % größer.
+- Vier kaufbare Räume statt einem: Backstage (wie bisher), Kantine, Garderobe, Regieraum. Preise
+  750, 1250, 2000 und 3000 Punkte. Jeder Raum hat eigene Zombie-Eingänge, die erst nach dem Kauf
+  benutzt werden, und eigene Requisiten als Deckung.
+- Beide Wandkäufe verschwinden, `scripts/game/level/wall_buy.gd` wird gelöscht.
+
+### 22.5 Freischalten zwischen den Läufen
+
+- **Konto:** Am Ende eines Laufs kommen alle Punkte aufs Konto, die der Spieler in diesem Lauf
+  verdient hat (Treffer, Kills, Wellen). Punkte aus dem Verkauf von Gegenständen zählen nicht, und
+  was im Lauf für Räume ausgegeben wurde, wird nicht abgezogen.
+- **Pakete:** Mit dem Konto kauft man Pakete in beliebiger Reihenfolge. Ein Paket schaltet 4
+  Gegenstände oder Waffen frei. Kisten bieten nur an, was freigeschaltet ist (Rucksack-Teile immer).
+  Startgegenstände der Kandidaten und `Game.grant_item` gehen immer.
+- **Von Anfang an frei:** `pistol`, `revolver`, `smg`, `shotgun`, `chain_lightning`, `pierce`,
+  `burn`, `lifesteal`, `max_hp`, `corpse_explosion`, `reload_shockwave`, `drone`, `speed`, `luck`,
+  `spotlight`, `speed_loader`, `piggy_bank` und die drei Rucksack-Teile.
+
+| Paket | Name | Preis | Inhalt |
+|---|---|---|---|
+| `camera_team` | Kamerateam | 2000 | `cam_tele`, `cam_lens`, `cam_battery`, `cam_zoom` |
+| `rapid_fire` | Schnellfeuer | 2000 | `machine_pistol`, `nail_gun`, `fire_rate`, `big_mag` |
+| `first_aid` | Erste Hilfe | 2500 | `shield`, `kill_heal`, `snack`, `dash` |
+| `poison_kitchen` | Giftküche | 3000 | `poison`, `frost`, `flamethrower`, `sawed_off` |
+| `precision` | Präzision | 3500 | `sniper`, `crossbow`, `scope`, `crit` |
+| `big_bang` | Knallbonbon | 4000 | `grenade_launcher`, `punchline`, `mine`, `extra_shot` |
+| `control_room` | Regieraum-Technik | 4500 | `cam_flash`, `cam_slow`, `cam_second`, `cam_uplink` |
+| `sustained_fire` | Dauerfeuer | 5000 | `rifle`, `lmg`, `burst_pistol`, `opener` |
+| `high_voltage` | Hochspannung | 6000 | `tesla`, `jammer`, `ricochet`, `disco_ball` |
+| `grand_finale` | Großes Finale | 8000 | `minigun`, `rocket_launcher`, `auto_shotgun`, `beam` |
+| `special_broadcast` | Sondersendung | 10000 | `replay`, `revive`, `thorns`, `cam_director` |
+
+- **Speichern:** `user://progress.cfg` (Konto, gekaufte Pakete, beste Welle, Zahl der Läufe).
+  Headless wird die Datei weder gelesen noch geschrieben, und dort gilt alles als freigeschaltet
+  (`unlock_all`), damit Tests den ganzen Vorrat sehen. Tests für das Freischalten schalten das ab.
+- **Oberfläche:** Bildschirm „Programm“ mit Kontostand und den Paketen als Karten (Name, Preis,
+  Inhalt mit Art und Kurztext, Kaufen). Erreichbar von der Kandidatenwahl und vom Game-Over-Schirm.
+  Game Over zeigt, wie viel aufs Konto kam.
+
+### 22.6 Wem welche Datei gehört (Bau in zwei Stufen)
+
+Stufe 1, gleichzeitig:
+
+- **Kern:** `scripts/core/*`, `scripts/autoload/*`, in `zombie.gd` nur Verlangsamung und Markierung
+  (22.7), die Kern-Tests (`test_backpack`, `test_chest_roller`, `test_game_state`,
+  `test_upgrade_state`, `test_weapon_state`, `test_wave_plan`, neu `test_cameras_core`,
+  `test_progress`) und Abschnitt 22.7 dieses Dokuments. Außerhalb davon nur die kleinsten
+  Anpassungen, damit alles lädt und die vorhandenen Tests bestehen.
+- **Studio:** `scripts/game/level/*`, bei Bedarf Zombie-Eingänge in `zombie_spawner.gd` und
+  `wave_manager.gd`, `tests/test_level.gd`.
+
+Stufe 2, gleichzeitig, nach dem Kern:
+
+- **Waffen:** `weapon_controller.gd`, `view_model.gd`, neue Dateien unter `scripts/game/player/`,
+  `tests/test_player_weapons.gd`.
+- **Kameras und Effekte:** `upgrade_effects.gd`, `drone.gd`, neue Dateien unter
+  `scripts/game/upgrades/`, `player.gd` (nur Zweite Staffel), `tests/test_upgrade_effects.gd`,
+  `tests/test_player_abilities.gd`.
+- **Oberfläche:** `scripts/ui/*`, `main.gd`, `tests/test_ui.gd`, `test_backpack_screen.gd`,
+  `test_character_select.gd`, neu `test_unlock_screen.gd`.
+- **Ton:** `tools/make_sounds.py`, `audio/`, `scripts/game/audio/sfx.gd`, `tests/test_audio.gd`.
+
+`scripts/game/fx/fx.gd` ändert in Stufe 2 niemand: Neue Bilder (Strahl, Flamme, Blitzlicht, Mine)
+baut jedes Modul in eigenen Dateien. `tests/test_smoke_game.gd`, `perf_game.gd` und
+`capture_game.gd` gehören dem Zusammenbau.
+
+### 22.7 Schnittstellen des Kerns (Stand nach Stufe 1)
+
+Der Kern ist gebaut und getestet (`test_cameras_core`, `test_progress`, dazu `test_backpack`,
+`test_chest_roller`, `test_game_state`, `test_upgrade_state`, `test_weapon_state`,
+`test_zombies_waves`). Was im Spiel schon wirkt: die Kameradrohne mit festen Werten und
+Kamera-Gegenständen, Verlangsamung und Markierung am Zombie, Kisten nur mit Freigeschaltetem,
+Konto und Pakete in `Game`. Alles andere aus Abschnitt 22 liegt als Daten und Regeln bereit und
+ist im Spiel noch wirkungslos (Liste je Helfer am Ende). Eine neue Waffe schießt bis dahin wie
+eine normale Kugelwaffe (der Granatwerfer wie ein kleiner Raketenwerfer).
+
+#### Neue Dateien
+
+| Datei | Inhalt |
+|---|---|
+| `scripts/core/camera_defs.gd` | Kameratabelle, Rechnung der fertigen Werte, Texte |
+| `scripts/core/unlock_defs.gd` | Startvorrat und Pakete |
+| `scripts/core/progress_state.gd` | Konto, gekaufte Pakete, beste Welle, Läufe (RefCounted) |
+| `tests/test_cameras_core.gd`, `tests/test_progress.gd` | Tests dazu |
+
+#### CameraDefs
+
+```
+ORDER       ["drone", "cam_tele", "cam_flash", "cam_slow", "cam_director"]
+MOD_ORDER   ["cam_lens", "cam_zoom", "cam_battery", "cam_second", "cam_uplink"]
+MOD_DAMAGE, MOD_RANGE, MOD_RATE, MOD_SECOND, MOD_UPLINK   die fünf IDs als Konstanten
+SLOW_DURATION 2.0   MARK_DURATION 4.0   FLASH_CONE_DEG 90.0 (voller Winkel)
+SECOND_FLASH_DELAY 0.4   MIN_INTERVAL 0.05
+all_ids(), has(id), is_mod(item_id), display_name(id)
+base(id, key, level) -> float     Grundwert: key "damage", "interval", "range", "pierce", "slow", "mark"
+mod_total(mod_id, key, levels) -> float
+stats(id, level, mods := {}, uplinks := []) -> Dictionary     die fertigen Werte (reine Funktion)
+effect_text(id, level) -> String  Text mit den Grundwerten der Rarität
+```
+
+`stats` rechnet: Schaden = Grundwert × (1 + Objektive + Sendeleitungen), Abstand = Grundwert /
+(1 + Akkupacks + Sendeleitungen), mindestens `MIN_INTERVAL`, Reichweite = Grundwert × (1 + Zooms),
+`second` = Summe der Zweitkameras. `mods` ist `mod_id -> Array` der Raritäten, `uplinks` die
+Raritäten aller Sendeleitungen. Die Stufenwerte der fünf Kamera-Gegenstände stehen in
+`UpgradeDefs.UPGRADES` (Schlüssel `bonus`, bei `cam_second` `share`), weil sie die Art `upgrade` haben.
+
+#### Einträge in `Game.cameras`
+
+Ein Eintrag je Kamera-Exemplar, in der Reihenfolge des Erwerbs. `Game.cameras` wird in
+`sync_build()` und beim Start eines Laufs neu gerechnet. Das Array wird nur ersetzt, wenn sich
+etwas geändert hat: Dann kommt `Events.cameras_changed` (vor `build_changed`). Wer prüfen will, ob
+er neu lesen muss, vergleicht mit `is_same`. Nur lesen.
+
+| Schlüssel | Typ | Bedeutung |
+|---|---|---|
+| `key` | String | eindeutig je Exemplar: `"<uid>:<nummer>"`, die Kamera selbst hat `:0` |
+| `uid` | int | uid der Kamera im Rucksack |
+| `copy` | int | 0 = die Kamera selbst, ab 1 Exemplare aus Wiederholungen |
+| `id` | String | Kameratyp |
+| `level` | int | Rarität dieses Exemplars (bei Wiederholung höchstens deren Rarität) |
+| `mods` | Dictionary | Kamera-Gegenstände auf der Kamera: `mod_id -> Array[int]` Raritäten |
+| `damage` | float | Schaden je Schuss, fertig gerechnet (Regie-Kamera 0) |
+| `interval` | float | Sekunden zwischen zwei Schüssen |
+| `range` | float | Reichweite in Metern |
+| `pierce` | int | weitere Zombies in der Linie (nur Tele, sonst 0) |
+| `slow`, `slow_duration` | float | Verlangsamung als Bruchteil (nur Zeitlupe, sonst 0) und Dauer |
+| `mark`, `mark_duration` | float | Mehr-Schaden als Bruchteil (nur Regie, sonst 0) und Dauer |
+| `second` | float | Anteil der Wirkung fürs zweite Ziel, 0 = keine Zweitkamera |
+| `cone_deg` | float | voller Öffnungswinkel (nur Blitzlicht, sonst 0) |
+| `damage_bonus`, `rate_bonus`, `range_bonus` | float | die Zuschläge als Bruchteile (für die Anzeige) |
+
+Feste Werte heißt: kein `Game.effect_factor()`, kein `companion_factor`, die Werte so nehmen, wie
+sie dastehen. Eine Wiederholung auf einer Kamera ergibt ein zweites Exemplar mit denselben
+Kamera-Gegenständen, eine Wiederholung auf einem Kamera-Gegenstand zählt ihn doppelt (auch die
+Sendeleitung).
+
+#### Geänderte und neue Funktionen im Kern
+
+```
+ItemDefs      KIND_CAMERA "camera", STAR_CAMERA "camera", CAMERA_COLOR
+              is_camera(id), is_camera_mod(id) (Sterne zielen auf Kameras, ohne Sendeleitung)
+              star_hits: STAR_CAMERA trifft Kameras, STAR_ITEM (Wiederholung) trifft Upgrade-Gegenstände
+              und Kameras. has_rarity, display_name, description, subtitle ("Selten · Kamera · 2 Felder"),
+              color kennen Kameras. weapon_text nennt Salve, Durchschlag, Explosion, Flamme, Strahl, Sprünge.
+              ORDER hat 64 Einträge (19 Waffen, 33 Upgrade-Gegenstände, 5 Kameras, 4 Verstärker, 3 Rucksack-Teile).
+BackpackState cameras() -> Array[Dictionary]   { key, uid, copy, id, level, mods }
+              copy_levels(uid), mods_of(uid), star_targets(uid), is_active(uid) gelten auch für Kameras.
+              Kameras stehen nicht in upgrade_levels() und global_copies(). cam_uplink steht in global_copies().
+UpgradeDefs   "drone" ist entfernt (ORDER hat 9 Einträge). Neu in UPGRADES und ITEM_ONLY (24 Einträge):
+              frost, opener, punchline, ricochet, thorns, revive, snack, mine, cam_lens, cam_zoom,
+              cam_battery, cam_second, cam_uplink. STACK_MODES neu: "slow" max, "waves" min.
+WeaponDefs    ORDER hat 19 Einträge. MODE_BULLET, MODE_GRENADE, MODE_FLAME, MODE_BEAM, PIERCE_ALL (999)
+              mode(id), burst(id), burst_interval(id), pierce(id), arc_jumps(id), arc_factor(id),
+              arc_radius(id), reach(id) (Schlüssel "range", sonst Balance.WEAPON_RANGE), cone_deg(id)
+              (halber Winkel), burn_dps(id), burn_time(id), projectile_speed(id), projectile_gravity(id),
+              is_automatic(id). dps(id) zählt alle Schüsse einer Salve.
+WeaponState   burst_left, burst_wait, burst_size(), burst_interval(), is_bursting(),
+              burst_shot_due(), fire_burst_shot(), cancel_burst(). start_reload() bricht die Salve ab.
+ChestRoller   build_item_offers(rng, backpack, rarity, force_bag := false, recent := [], progress := null)
+              Mit progress nur Freigeschaltetes (Rucksack-Teile immer), null = alles. Der sichere erste
+              Eintrag ist ein Upgrade-Gegenstand oder eine Kamera.
+UnlockDefs    START, PACK_ORDER, PACKS, all_pack_ids(), has_pack(id), pack_name(id), pack_price(id),
+              pack_items(id), is_start_item(item_id), pack_of(item_id) ("" = in keinem Paket), start_items()
+ProgressState bank, packs (Kaufreihenfolge), unlock_all, best_wave, runs
+              has_pack(id), is_item_unlocked(item_id), can_buy(id), buy(id) -> bool, add_bank(n) -> int,
+              record_run(wave), open_packs(), to_dict(), from_dict(data)
+Balance       SLOW_ELITE_FACTOR 0.5, SLOW_MAX 0.9, FROST_DURATION 2.0, PUNCHLINE_RADIUS 3.0,
+              RICOCHET_RADIUS 6.0, RICOCHET_DAMAGE_FACTOR 0.6, THORNS_RADIUS 2.5, REVIVE_HP_SHARE 0.3,
+              REVIVE_INVULNERABILITY 1.5, REVIVE_SHOCKWAVE_RADIUS 6.0, REVIVE_SHOCKWAVE_KNOCKBACK 12.0,
+              REVIVE_SHOCKWAVE_DAMAGE 0.0, MINE_MAX_ACTIVE 5, MINE_TRIGGER_RADIUS 1.2, MINE_RADIUS 3.0,
+              CAMERA_RECOIL_KICK_DEG hat alle 19 Waffen.
+```
+
+`Game` (neu oder geändert):
+
+```
+cameras: Array[Dictionary]        siehe oben
+cameras_of(camera_id) -> Array[Dictionary], camera_entry(key) -> Dictionary, camera_levels() -> Dictionary
+progress: ProgressState           Fortschritt über alle Läufe
+progress_file_enabled: bool       false ohne Bildschirm: dort wird nie geladen oder gespeichert
+bank_points_earned: int           im Lauf verdiente Punkte fürs Konto (ohne Verkaufserlöse)
+last_bank_gain: int               Gutschrift des zuletzt beendeten Laufs
+buy_pack(pack_id) -> bool         kauft, speichert, sendet pack_unlocked und bank_changed(konto, -preis)
+save_progress_to(path) -> bool, load_progress_from(path) -> bool   ConfigFile, Abschnitt "progress"
+PROGRESS_PATH "user://progress.cfg"
+get_stats()                       neu: "cameras" (Array aus { id, name, level }), "bank_gained", "bank"
+sync_build()                      rechnet auch cameras neu
+open_chest(rarity)                reicht progress an die Kisten weiter
+grant_item(id, level)             fragt nicht nach dem Freischalten
+```
+
+- `upgrade_chosen(id, level)` kommt beim Schließen des Rucksacks jetzt auch für neue oder bessere
+  Kameras (id = Kameratyp). Namen dafür mit `ItemDefs.display_name(id)` holen, nicht mit
+  `UpgradeDefs.display_name`.
+- `Game.upgrades` kennt die Kameradrohne nicht mehr: `get_level("drone")` ist 0, `add_levels("drone", n)`
+  tut nichts. Eine Kamera kommt nur über den Rucksack ins Spiel (`backpack.add_item`, einräumen,
+  `sync_build()`), so machen es jetzt auch die Tests.
+- **Konto:** Gezählt wird alles, was im Lauf gutgeschrieben wird (Treffer, Kills, Wellen-Prämien,
+  auch Trostpreis-Punkte, mit Punkte-Faktor), außer Verkaufserlösen. Startpunkte des Kandidaten
+  zählen nicht, Ausgaben werden nicht abgezogen. Abgerechnet wird genau einmal je Lauf
+  (`_settle_run`): in `end_run()` vor `game_over`, sonst beim Neustart oder Beenden aus der Pause,
+  beim Schließen des Fensters oder wenn ein neuer `start_run()` einen offenen Lauf ablöst.
+  `bank_changed(konto, gutschrift)` kommt dabei immer, auch mit Gutschrift 0.
+- **Headless:** `progress.unlock_all = true`, die Datei wird weder gelesen noch geschrieben. Tests
+  für das Freischalten setzen `Game.progress.unlock_all = false` und danach wieder `true`.
+
+#### Signale (Events hat jetzt 43)
+
+| Signal | Sender | Bedeutung |
+|---|---|---|
+| `cameras_changed` | Game | `Game.cameras` wurde ersetzt |
+| `bank_changed(bank, gained)` | Game | Konto geändert: am Laufende die Gutschrift, beim Kauf der negative Preis |
+| `pack_unlocked(pack_id)` | Game | Paket gekauft |
+| `camera_fired(camera_id, position)` | noch niemand (Kamera-Knoten) | Schuss, Blitz oder Markierung einer Kamera, für Ton und Anzeige |
+| `mine_placed(position)`, `mine_triggered(position)` | noch niemand (Requisitenbombe) | Mine gelegt, Mine ausgelöst (die Explosion kommt zusätzlich als `explosion`) |
+| `player_revived` | noch niemand (`player.gd`) | Zweite Staffel hat einen tödlichen Treffer abgefangen |
+
+#### Zombie (`zombie.gd`)
+
+```
+apply_slow(factor, duration)   factor 0.3 = 30 % langsamer. Elite: mal Balance.SLOW_ELITE_FACTOR.
+                               Höchstens Balance.SLOW_MAX. Die stärkste gilt, die Zeit beginnt neu.
+is_slowed() -> bool, get_speed_factor() -> float (1,0 ohne Verlangsamung)
+apply_mark(bonus, duration)    Markierte nehmen aus jeder Quelle (1 + bonus) mal Schaden.
+                               Die stärkste gilt, die Zeit beginnt neu.
+is_marked() -> bool, get_damage_factor() -> float (1,0 ohne Markierung)
+```
+
+- Die Verlangsamung bremst nur das Laufen (`move_speed` bleibt der Grundwert), nicht den Schlag.
+  Zu sehen: eisblauer Körper.
+- Die Markierung rechnet `take_damage` selbst ein. `zombie_damaged` meldet den erhöhten Betrag,
+  `bullet_hit` weiter den Betrag der Waffe. Wer Trefferzahlen zeigt und den echten Schaden will,
+  multipliziert mit `zombie.get_damage_factor()` (vor dem Treffer lesen). Zu sehen: pinke Pyramide
+  über dem Kopf (Kind `Mark`).
+
+#### Werte der neuen Gegenstände lesen
+
+| Gegenstand | Lesen | Feste Zahlen |
+|---|---|---|
+| `frost` | `Game.bullet_value(weapon_uid, "frost", "slow")`, wirkt wenn `Game.bullet_level(weapon_uid, "frost") > 0` | `Balance.FROST_DURATION` |
+| `opener` | `Game.bullet_value(weapon_uid, "opener", "bonus")` (1,0 = +100 %) | |
+| `punchline` | `Game.bullet_value(weapon_uid, "punchline", "damage")` mal `Game.effect_factor()` | `Balance.PUNCHLINE_RADIUS` |
+| `ricochet` | `Game.bullet_value(weapon_uid, "ricochet", "chance")` | `Balance.RICOCHET_RADIUS`, `RICOCHET_DAMAGE_FACTOR` |
+| `thorns` | `Game.upgrades.value("thorns", "damage")` mal `Game.effect_factor()` | `Balance.THORNS_RADIUS` |
+| `revive` | `Game.upgrades.copies("revive")`: je Exemplar eine Ladung, ihre Wartezeit `UpgradeDefs.value("revive", "waves", rarität)` | `Balance.REVIVE_*` |
+| `snack` | `Game.upgrades.value("snack", "heal")` | |
+| `mine` | `Game.upgrades.value("mine", "interval")` (kleinster) und `("mine", "damage")` (Summe) mal `Game.effect_factor()` | `Balance.MINE_*` |
+| Kamera-Gegenstände | stecken schon in `Game.cameras` | |
+
+Mehrere Exemplare: `slow` nimmt den stärksten Wert, `chance` endet bei 100 %, `waves` und
+`interval` nehmen den kleinsten, alles andere addiert sich.
+
+#### Formen und Sternmuster (ungedreht, x nach rechts, y nach unten)
+
+| ID | Form | Sterne |
+|---|---|---|
+| `drone` | 2 Felder waagerecht | |
+| `cam_slow` | 1 Feld | |
+| `cam_tele` | 3 Felder in einer Linie | |
+| `cam_director` | L aus 3 Feldern | |
+| `cam_flash` | Quadrat aus 4 Feldern | |
+| `cam_lens` | 1 Feld | links und rechts (Ziel: Kamera) |
+| `cam_zoom` | 2 Felder senkrecht | rechts neben beiden Feldern (Ziel: Kamera) |
+| `cam_battery` | 1 Feld | links, rechts und unten (Ziel: Kamera) |
+| `cam_second` | 2 Felder waagerecht | ein Feld davor, bei (2, 0) (Ziel: Kamera) |
+| `cam_uplink` | L aus 3 Feldern | keine |
+| `frost` | 1 Feld | drei in einer Reihe darüber |
+| `opener` | L aus 3 Feldern | links und über dem Eckfeld |
+| `punchline` | 2 Felder senkrecht | drei in einer Reihe darunter |
+| `ricochet` | 1 Feld | rechts oben und rechts unten (übereck) |
+| `thorns` | L aus 3 Feldern | keine |
+| `revive` | Quadrat aus 4 Feldern | keine |
+| `snack` | 1 Feld | keine |
+| `mine` | 2 Felder waagerecht | keine |
+
+Waffen: `burst_pistol` L aus 3, `nail_gun` Quadrat aus 4, `machine_pistol` L aus 3, `crossbow` T aus 4,
+`grenade_launcher` L aus 4 (alle eine Hand), `flamethrower` 4 in Linie mit 2 darunter am Ende,
+`beam` L aus 5, `tesla` 3 in Linie mit 2 darunter, `lmg` 4 in Linie mit 2 darunter in der Mitte,
+`auto_shotgun` L aus 5 (alle zwei Hände). Nur in Silber und Gold: `beam`, `auto_shotgun`.
+
+#### Entscheidungen über Abschnitt 22 hinaus
+
+1. **Kameradrohne ganz aus `UpgradeDefs` entfernt** (nicht nur für Text behalten): Name, Text und
+   Zahlen der Kameras stehen allein in `CameraDefs`. Sonst gäbe es zwei Tabellen für dieselbe Kamera.
+2. **Formen weichen vom Vorschlag ab,** damit keine zwei Kameras dieselbe Form haben: Zeitlupe
+   1 Feld, Blitzlicht 4 Felder (statt je 2). Der Akkupack hat Sterne links, rechts und unten (statt
+   oben und unten): Sonst wäre er ein gedrehtes Objektiv.
+3. **Zuschläge addieren sich:** Objektiv und Sendeleitung beim Schaden, Akkupack und Sendeleitung
+   bei der Schussfolge. Die Zweitkamera hat keinen Deckel: Zwei legendäre geben dem zweiten Ziel 200 %.
+4. **Wiederholung auf einer Kamera:** Das zweite Exemplar hat dieselben Kamera-Gegenstände.
+5. **Verlangsamung:** höchstens 90 %, sie bremst nur das Laufen.
+6. **Was in keinem Paket steht, gilt als frei** (`ProgressState.is_item_unlocked`). Der Test in
+   `test_progress.gd` stellt sicher, dass jeder Gegenstand genau ein Zuhause hat.
+7. **Konto:** Abrechnung auch bei Abbruch des Laufs (siehe oben), Trostpreis-Punkte zählen mit.
+8. **Salve:** `fire_rate` zählt Salven je Sekunde. Der Schnelldurchlauf verkürzt auch den Abstand
+   in der Salve. Reicht das Magazin nicht, ist die Salve kürzer.
+9. **Zahlen, die 22.2 offen ließ** (alle in `weapon_defs.gd`): Preise der neuen Waffen, Streuung von
+   Granatwerfer (0,5) und Kurzschluss (0,6), halber Flammenwinkel 14 Grad, Granate 22 m/s bei
+   Schwerkraft 12 m/s², Kurzschluss ohne Dauerfeuer.
+10. **Zweite Staffel:** Die Druckwelle stößt nur weg (Radius 6 m, 12 m/s, kein Schaden).
+11. **Requisitenbombe mit mehreren Exemplaren:** kürzester Abstand, Schaden addiert sich (wie beim
+    Störsender). Es bleibt bei höchstens 5 Minen.
+
+Abschnitte 22.1 bis 22.6 sind unverändert.
+
+#### Kleinste Anpassungen außerhalb des Kerns (damit alles lädt und die Tests bestehen)
+
+- `drone.gd`: liest Schaden, Abstand und Reichweite aus ihrem Eintrag (`stats`, `set_stats(entry)`,
+  `get_range()`, Konstante `CAMERA_ID`). Ohne Eintrag gelten die Grundwerte ihrer Rarität.
+- `upgrade_effects.gd`: eine Drohne je Eintrag aus `Game.cameras_of("drone")`, die Einträge werden
+  zugeteilt, sobald sich `Game.cameras` ändert (`_assign_drone_stats`).
+- `backpack_screen.gd`: nur die Tabelle `NAME_HYPHENS` (Trennstellen für die neuen Namen).
+- `chest_choice.gd`: Die Karte einer Kamera nennt „Kamera · …“ statt „Verstärker · …“.
+- `view_model.gd`: `_build_placeholder(slot, id)`, ein schlichtes Platzhalter-Modell für jede
+  Waffe ohne eigenes Modell (kurz für eine Hand, lang für zwei). Ohne Eintrag in `RECOIL` hat
+  eine Waffe dort weder Rückstoß noch Mündungsfeuer.
+- Tests: `test_upgrade_effects.gd` (Drohne über den Rucksack, feste Werte), `test_backpack_screen.gd`
+  (Hilfsfunktion `_level` kennt Kameras), `test_smoke_game.gd` (Drohne über den Rucksack),
+  `test_ui.gd` (Kartentext gegen `ItemDefs.description` statt `UpgradeDefs.effect_text`: Bei
+  Stern-Gegenständen hängt der Hinweis auf die Sterne daran. Kamera-Karten heißen „Kamera“).
+
+#### Was die Helfer der Stufe 2 noch bauen
+
+**Waffen** (`weapon_controller.gd`, `view_model.gd`):
+
+- Salve über `WeaponState`: nach `tick()` in einer Schleife `burst_shot_due()` und je Schuss
+  `fire_burst_shot()`. Ohne das gibt der Dreierpack nur einen Schuss je Abzug.
+- `MODE_GRENADE`: Geschoss im Bogen (`projectile_speed`, `projectile_gravity`), am Einschlag
+  Treffer `damage` und Explosion (`explosion_damage`, `explosion_radius`, `Events.explosion`).
+- `MODE_FLAME`: je Stoß alle Zombies im Kegel (`reach`, `cone_deg` als halber Winkel) mit `damage`,
+  dazu Brand über `zombie.apply_burn(WeaponDefs.burn_dps(id), WeaponDefs.burn_time(id))` (fester Wert).
+- `MODE_BEAM`: je Treffer alle Zombies in der Linie (`pierce` = `PIERCE_ALL`).
+- Eingebauter Durchschlag `WeaponDefs.pierce(id)`: addiert sich zu `Game.bullet_value(uid, "pierce",
+  "targets")`. Vorschlag: Schadensverlust wie bisher (`pierce_damage_factor`), beim Strahl keiner.
+- Eingebauter Blitz (Kurzschluss): `arc_jumps`, `arc_factor`, `arc_radius`, Quelle `"lightning"`.
+- Flamme und Strahl melden jeden Treffer als `bullet_hit` mit `weapon_uid`, damit die Gegenstände
+  auf der Waffe wirken.
+- `opener` (erste Kugel jedes Magazins) und `punchline` (letzte Kugel, Explosion mit der Quelle
+  `"explosion"`): Beide brauchen den Magazinstand, deshalb hier.
+- Modelle für die zehn neuen Waffen statt der Platzhalter, dazu ihre Einträge in `RECOIL` und
+  `WEAPON_OFFSETS`. Der Kamera-Rückstoß steht schon in `Balance.CAMERA_RECOIL_KICK_DEG`.
+
+**Kameras und Effekte** (`upgrade_effects.gd`, `drone.gd`, neue Dateien, `player.gd` nur Zweite Staffel):
+
+- Knoten für `cam_tele`, `cam_flash`, `cam_slow`, `cam_director`: je Eintrag aus `Game.cameras` einer,
+  Werte nur aus dem Eintrag. Schadensquelle = Kameratyp (`"drone"` bleibt, dazu `"cam_tele"`,
+  `"cam_flash"`, `"cam_slow"`). Zeitlupe über `zombie.apply_slow(slow, slow_duration)`, Regie über
+  `zombie.apply_mark(mark, mark_duration)` (zuerst Elite, dann Unmarkierte).
+- `second` > 0: zweites Ziel mit diesem Anteil der Wirkung (Blitzlicht: zweiter Blitz nach
+  `CameraDefs.SECOND_FLASH_DELAY`). Gilt auch für die Drohne.
+- `Events.camera_fired(camera_id, position)` bei jedem Schuss senden, auch in `drone.gd`.
+- `frost` (bei `bullet_hit`: `apply_slow`), `ricochet` (bei `bullet_hit`: zweiter Zombie mit der
+  Quelle `"ricochet"`, löst selbst nichts weiter aus), `thorns` (bei `player_damaged`, Quelle
+  `"thorns"`), `snack` (bei `wave_cleared`), `mine` (Quelle `"mine"`, `mine_placed`, `mine_triggered`,
+  `explosion`), `revive` (in `player.gd`, `player_revived`, Ladungen je Exemplar).
+
+**Oberfläche** (`scripts/ui/*`, `main.gd`):
+
+- Bildschirm „Programm“: `Game.progress`, `UnlockDefs`, `Game.buy_pack(id)`, Signale `bank_changed`
+  und `pack_unlocked`. Game Over zeigt `stats["bank_gained"]` und `stats["bank"]`.
+- Kameras sind keine Upgrades mehr: Sie fehlen deshalb in der Upgrade-Leiste des HUD und in der
+  Upgrade-Liste von Game Over (dort `Game.cameras`, `Game.camera_levels()` oder `stats["cameras"]`
+  nehmen). `hud.make_upgrade_row` holt Namen mit `UpgradeDefs.display_name`: für Kameras
+  `ItemDefs.display_name` nehmen.
+- `chest_choice.gd`: Eine Kamera zeigt auf ihrer Karte die Form statt eines gezeichneten Bilds
+  (auch die Kameradrohne, die früher ihr Bild hatte). Die Zeile darunter nennt schon „Kamera · …“.
+- `backpack_screen.gd`: Hinweise für Kamera-Gegenstände („Stern auf eine Kamera legen“ statt
+  „auf eine Waffe“), für die Wiederholung auf Kameras, „Darauf wirken“ bei Kameras
+  (`pack.mods_of(uid)`), fertige Werte einer Kamera aus `Game.camera_entry(key)`, Bilder für die
+  neuen Gegenstände.
+- Anzeige für die Ladungen der Zweiten Staffel, wenn der Effekte-Helfer sie anbietet.
+
+**Ton** (`sfx.gd`, `tools/make_sounds.py`):
+
+- Neue Signale: `camera_fired` (je Kameratyp), `mine_placed`, `mine_triggered`, `player_revived`,
+  `pack_unlocked`, `bank_changed`.
+- `weapon_fired(weapon_id)` kommt für zehn neue Waffen-IDs (Flamme und Strahl bis zu 20 Mal je Sekunde).
+- Neue Schadensquellen in `zombie_damaged`: `"cam_tele"`, `"cam_flash"`, `"cam_slow"`, `"ricochet"`,
+  `"thorns"`, `"mine"`.
+
+**Zusammenbau:** `tests/capture_game.gd` und `tests/perf_game.gd` setzen die Drohne noch mit
+`_set_upgrades({"drone": n})`: Das erzeugt keine Drohne mehr (kein Fehler, sie fehlt nur). Dort wie
+in `test_smoke_game.gd` die Kamera in den Rucksack legen und `Game.sync_build()` rufen.
+
+## 23. Größeres Studio und kaufbare Räume (Stand 2026-11-21)
+
+Setzt 22.4 um. Dieser Abschnitt gilt vor Abschnitt 9 und vor dem Teil „LevelBuilder“, „Door“ und
+„WallBuy“ in 13.6, wo sie sich widersprechen (Liste in 23.8).
+
+### 23.1 Grundriss
+
+Achsen wie bisher: +X ist rechts (Osten), +Z zeigt zum Publikum (Süden), der Spieler schaut am
+Anfang nach −Z. Alle Räume sind 5 m hoch, die Wände 0,4 m dick.
+
+| Zone | Name | Innenmaße | Lage (x von..bis, z von..bis) | Preis |
+|---|---|---|---|---|
+| 1 | Bühne | 26,5 × 21 m | −13,25..13,25, −10,5..10,5 | – |
+| 2 | Backstage | 14 × 12 m | 13,65..27,65, −1,5..10,5 (Südost) | 750 |
+| 3 | Kantine | 14 × 12 m | −27,65..−13,65, −1,5..10,5 (Südwest) | 1250 |
+| 4 | Garderobe | 14 × 12 m | 13,65..27,65, −13,9..−1,9 (Nordost) | 2000 |
+| 5 | Regieraum | 14 × 12 m | −27,65..−13,65, −13,9..−1,9 (Nordwest) | 3000 |
+
+- Die Bühne hatte 22 × 18 m (396 m²), jetzt 26,5 × 21 m (556,5 m², plus 40,5 %). Das Podest ist
+  14 × 5 m groß (vorher 12 × 4,5 m), 0,4 m hoch, mit Showtreppe vorn und je einer Rampe links und
+  rechts.
+- `player_spawn` bleibt (0, 0, 5). Die Kulissen in der Raummitte (zwei Stellwände, zwei
+  Kandidatenpulte) stehen an ihren alten Plätzen, damit Tests mit festen Koordinaten weiter
+  stimmen. Neu auf der Bühne: das Geschenk „HAUPTGEWINN“ (−9,45, −2,2) und das Glücksrad
+  (9,65, 6,5). Die zwei Studiokameras stehen jetzt bei (−8,4, 7,9) und (6,4, 8,3).
+- Die beiden hinteren Räume ragen 3,4 m nach Norden über die Bühne hinaus.
+- Jeder Raum hat eigene Farben und Requisiten: Backstage (grau-blau, Kisten, Flightcases,
+  Kabeltrommel, Requisitenregal, Scheinwerfer auf Stativ), Kantine (Karo in Creme und Orange,
+  Essensausgabe mit Tafel „HEUTE: KOPFSALAT“, Kühlschrank, vier Stehtische, zwei Automaten,
+  Tablettwagen, Getränkekisten), Garderobe (Streifen in Rosa, zwei Kleiderständer, zwei
+  Schminktische mit Spiegel, Paravent, Schrank, Hutschachteln, Schild „NUR FÜR STARS“), Regieraum
+  (dunkelblau, Monitorwand mit „AUF SENDUNG“, Regiepult, vier Serverschränke, Bandarchiv,
+  Kabeltrommel).
+- Regel für Requisiten: Alles mit Kollision ist mindestens 0,9 m hoch. Der Spieler springt 0,84 m,
+  Zombies hüpfen 0,65 m, so entsteht kein Platz, auf den nur der Spieler kommt. Die Mitte jedes
+  Raums (7 m von der Bühnenwand, 6 m von der Nordwand) bleibt frei.
+
+### 23.2 Türen
+
+Sechs Türen, alle `door.gd`, alle in der neuen Gruppe `doors`:
+
+| Knoten unter `Level` | Lage (x, z) | verkauft |
+|---|---|---|
+| `Door` | (13,45, 4) Ostwand der Bühne | Backstage, 750 |
+| `DoorCanteen` | (−13,45, 4) Westwand | Kantine, 1250 |
+| `DoorWardrobe` | (13,45, −6) Ostwand | Garderobe, 2000 |
+| `DoorControlRoom` | (−13,45, −6) Westwand | Regieraum, 3000 |
+| `LinkEast` | (20,65, −1,7) Wand zwischen Backstage und Garderobe | den Raum, der noch zu ist |
+| `LinkWest` | (−20,65, −1,7) Wand zwischen Kantine und Regieraum | den Raum, der noch zu ist |
+
+- Alle vier Räume sind direkt von der Bühne aus kaufbar. Über jeder Tür hängt auf der Bühne ein
+  Schild mit dem Raumnamen in der Farbe des Raums, das Türblatt nennt Raum und Preis.
+- Wird ein Raum gekauft (an welcher seiner Türen auch immer), gehen alle Türen dieses Raums auf,
+  seine Spawnpunkte werden aktiv, es kommt genau ein Banner „<Raum> ist offen!“.
+- Eine Verbindungstür geht erst auf, wenn beide Räume gekauft sind. Ist einer offen, verkauft sie
+  den anderen zu dessen Preis (Hinweis, Türblatt und `cost` wechseln mit). So entsteht je Seite
+  ein Rundweg Bühne – vorderer Raum – hinterer Raum – Bühne.
+- `door.gd`, neu: `const GROUP_DOORS`, `signal closed`, `var back_zone: int` (0 = keine
+  Verbindungstür), `var back_zone_name: String`, `var back_cost: int`,
+  `func zone_opened(opened_zone: int) -> void` (Meldung an jede Tür, ruft `open()` selbst auf).
+  `zone`, `zone_name` und `cost` nennen immer den Raum, den es an dieser Tür gerade zu kaufen gibt.
+  `open()` öffnet den Raum der Tür ohne Bezahlung, `close()` läuft bei `run_started` und stellt
+  auch die Belegung einer Verbindungstür zurück. `is_open`, `opened`, `get_prompt()`,
+  `interact()`, `size` sind unverändert.
+
+### 23.3 Zombie-Eingänge
+
+Elf Eingänge (`Entrances/Entrance_A` bis `Entrance_K` mit `Spawn_A` bis `Spawn_K`), gebaut wie
+bisher (4,5 m langer Gang, Spieler-Sperre auf Lage 6, Warnlampe, Schild „AUFTRITT ZOMBIES“):
+
+| Zone | Eingänge |
+|---|---|
+| 1 Bühne | A Showtor in der Rückwand auf Bühnenhöhe (x 0), B Südwand ganz im Westen (x −11,25), C Rückwand ganz im Osten (x 11,25) |
+| 2 Backstage | D Südwand (x 18,65), E Ostwand (z 7,0) |
+| 3 Kantine | F Südwand (x −18,65), G Westwand (z 7,0) |
+| 4 Garderobe | H Nordwand (x 23,15), I Ostwand (z −10,4) |
+| 5 Regieraum | J Nordwand (x −23,15), K Westwand (z −10,4) |
+
+Meta `zone` ist 1 bis 5, Meta `active` ist nur in Zone 1 von Anfang an wahr. `zombie_spawner.gd`
+und `wave_manager.gd` brauchten keine Änderung an der Logik (nur Kommentare im Spawner).
+Die Eingänge B und C liegen nicht mehr in der West- und Ostwand, weil dort jetzt die Türen sind.
+
+### 23.4 Navigation
+
+- Gebacken wird weiter einmal und synchron aus der Gruppe `nav_source` (gemessen 34 ms für das
+  ganze Studio). Danach verteilt `StudioShow.bake()` die Flächen auf fünf Regionen: `NavRegion`
+  (Bühne, immer an) und `NavRegion2` bis `NavRegion5` (je Raum samt seiner Gänge). Alle Regionen
+  teilen dieselben Eckpunkte und schließen an den Türen lückenlos an.
+- Die Region eines Raums ist nur an, solange er gekauft ist. Kein Zombie plant einen Weg durch
+  eine geschlossene Tür, auch nicht den kürzeren durch einen fremden Raum.
+- Flächen mit einer Ecke in der Bühne gehören zur Bühne (auch der Streifen durch eine Türöffnung),
+  sonst entscheidet der Mittelpunkt.
+- Das Level stellt die Navigationskarte auf synchrones Abgleichen
+  (`NavigationServer3D.map_set_use_async_iterations(map, false)`): Ein gekaufter Raum ist nach
+  3 Physik-Schritten erreichbar, mit und ohne `--fixed-fps` (vorher 4 bis 9).
+- Die Türen gehören weiter nicht zu `nav_source`.
+
+### 23.5 Sichtbarkeit und Licht
+
+- Ein Raum, seine Gänge und seine Lichter sind ausgeblendet, bis er gekauft ist (Knoten `ZoneN`,
+  `Entrance_X`, Lichter). Die Wand zwischen zwei Räumen einer Seite liegt unter `Partitions` und
+  ist immer zu sehen.
+- Lichter: 23 Punktlichter und 4 Scheinwerfer, wenn alles offen ist (am Anfang 9 und 4). Je Raum
+  ein Deckenlicht in seiner Farbe und das grüne Licht in jedem Gang, dazu ein Schminklicht in der
+  Garderobe und ein Monitorlicht im Regieraum. Der Compatibility-Renderer zeigt höchstens 32
+  Punktlichter und Scheinwerfer je Bild und 8 je Mesh, deshalb ein Deckenlicht je Raum statt zwei
+  und zwölf Mesh-Stücke für den Bühnenboden.
+- Die Geometrie aller Räume liegt auf Render-Ebene 2 (kühles Hauptlicht `KeyCool`).
+
+### 23.6 `level_info` und Knoten
+
+`LevelBuilder.build` liefert jetzt fünf Schlüssel. Die drei alten sind unverändert:
+
+- `player_spawn: Vector3`, `nav_region: NavigationRegion3D` (Netz der Bühne), `door: Node3D`
+  (Tür zum Backstage, Knoten `Level/Door`).
+- Neu `rooms: Array[Dictionary]`, nach Preis geordnet, je Raum: `zone` (int), `key`
+  (`backstage`, `canteen`, `wardrobe`, `control_room`), `name`, `cost`, `door` (Tür an der
+  Bühne), `nav_region`, `center` (Bodenmitte in Weltkoordinaten), `size` (Innenmaße).
+- Neu `links: Array[Node3D]` (die beiden Verbindungstüren).
+
+Knoten unter `Level`: `NavRegion`, `NavRegion2` bis `NavRegion5`, `Door`, `DoorCanteen`,
+`DoorWardrobe`, `DoorControlRoom`, `LinkEast`, `LinkWest`, `Show`, `Environment`, `Lights`,
+`Zone1` bis `Zone5`, `Partitions`, `Audience`, `Entrances`.
+
+`StudioShow` (Knoten `Show`), neu: `zone_doors`, `zone_regions`, `zone_nodes`, `zone_warn`
+(Dictionary, Schlüssel = Zone), `stage_rect`, `zone_rects`, `func is_zone_open(zone: int) -> bool`.
+`warn_zone2` gibt es nicht mehr.
+
+### 23.7 Konstanten
+
+- `balance.gd`: `DOOR_COSTS: Array[int] = [DOOR_COST, 1250, 2000, 3000]` (Zonen 2 bis 5),
+  `DOOR_COST` bleibt 750. `ZONE1_SIZE` ist jetzt (26,5, 5, 21). `ZONE2_SIZE` (14, 5, 12) gilt für
+  jeden kaufbaren Raum.
+- `level_builder.gd`, neu: `ROOMS` (Tabelle der Räume: Zone, Schlüssel, Name, Türknoten, Seite,
+  Reihe, Eingänge, Farbe), `DOOR_BACK_Z = -6`, `LINK_DOOR_INSET = 7`, `PLAYER_SPAWN_Z = 5`,
+  `STAGE_ENTRANCE_INSET = 2`, `CLADDING = 0,04`, `SHOW_SIGN_WIDTH = 12`, `ROOM_LIGHT_RANGE = 13`,
+  dazu die Farben der drei neuen Räume. Geändert: `STAGE_DEPTH` 4,5 → 5, `STAGE_HALF_WIDTH` 6 → 7.
+  Requisiten eines Raums stehen in Raum-Koordinaten (`_room_point(room, u, v)`: u = Abstand von
+  der Bühnenwand, v = Abstand von der Nordwand), so gelten sie östlich und westlich gleich.
+
+### 23.8 Was sich gegenüber den Abschnitten 9, 13 und 14 ändert
+
+- Wandkäufe gibt es nicht mehr: `wall_buy.gd` ist gelöscht, die Knoten `WallBuy_shotgun` und
+  `WallBuy_smg` fehlen, der Teil „WallBuy“ in 13.6 und „Wandkauf“ in 14.1 entfallen. In Abschnitt 3
+  (Ordner), 13.1 und 18.3 steht die Datei noch.
+- Abschnitt 9: Maße der Bühne, Lage und Zahl der Eingänge (11 statt 5), Zahl der Zonen (5 statt
+  2), „eine NavigationRegion3D“ (jetzt fünf), Rückgabe von `build` (fünf Schlüssel).
+- 13.6 „LevelBuilder“: Grundriss, Knotennamen, Eingänge, Licht. „Door“: Eine Tür öffnet nur noch
+  die Spawnpunkte ihres eigenen Raums, dazu Verbindungstüren und `closed`.
+- 14.1: „Backstage liegt östlich“ stimmt weiter, es liegt jetzt in der Südhälfte der Ostseite.
+- 14.4: Requisiten stehen weiter an festen Stellen, in den Räumen aber relativ zum Raum. Dass
+  kein begehbarer Fleck abgeschnitten ist und unter jedem Fleck Boden liegt, prüft
+  `test_level.gd` jetzt mit einer Füll-Probe im Raster von 0,25 m.
+- 13.2 (`main.gd`) braucht keine Änderung. Der Kommentar an `level_info` in `main.gd` nennt noch
+  drei Schlüssel.
+
+### 23.9 Stand der Prüfung
+
+- `tests/test_level.gd`: 859 Prüfungen, bestanden mit und ohne `--fixed-fps 60`. Neu geprüft:
+  Zahl und Preise der Türen, Spawnpunkte je Zone erst nach dem Kauf aktiv, kein Pfad in einen
+  geschlossenen Raum, jeder offene Raum von der Bühne erreichbar und zurück, Kauf an der
+  Verbindungstür in beiden Reihenfolgen, Rundweg mit einem Läufer in Spielergröße, echte Zombies
+  (`zombie.gd`) aus sieben Gängen finden in die Garderobe und zum Spielerstart, kein Wandkauf
+  mehr, Spielerstart frei, kein Loch nach draußen, Boden unter jedem begehbaren Fleck, neuer Lauf.
+- `tests/test_zombies_waves.gd` (238 Prüfungen) und `tests/check_scripts.gd` (41 Skripte) bestehen
+  unverändert.
+- `tests/test_smoke_game.gd` hat neun Prüfungen, die den alten Stand erwarten (5 Spawnpunkte, alle
+  Spawnpunkte aktiv nach der Backstage-Tür, zwei Wandkäufe). `tests/capture_game.gd` greift auf
+  `Level/WallBuy_shotgun` und `Level/WallBuy_smg` zu. Beides gehört dem Zusammenbau.
+- Mit Grafik angesehen (45 Bilder `_shots/studio_*.png`): Bühne, alle Türen, jeder Raum aus
+  mehreren Richtungen, Draufsicht ohne Decken. Von Hand gespielt hat das neue Studio niemand.
+
+## 24. Ausbau 3: Stand nach dem Zusammenbau (Stand 2026-11-21)
+
+Alles aus Abschnitt 22 ist gebaut. Die Liste „Was die Helfer der Stufe 2 noch bauen“ in 22.7 ist
+damit erledigt. Dieser Abschnitt nennt, was dabei über 22 und 23 hinaus entstanden ist.
+
+### 24.1 Waffen (`weapon_controller.gd`, `view_model.gd`, neu `grenade.gd`, `beam_fx.gd`, `flame_fx.gd`)
+
+- Salve, Granate im Bogen, Flamme im Kegel, Dauerstrahl, eingebauter Durchschlag und eingebauter
+  Blitz arbeiten wie in 22.2 und 22.7 beschrieben. Alle zehn Waffen haben eigene Modelle.
+- `WeaponController.get_stream(hand_index := 0) -> Node3D`: Bild von Strahl oder Flamme der Hand.
+- Treffer-`info` hat zusätzlich `mode`, `opener`, `scored` (gab Treffer-Punkte), ein Blitzsprung
+  `arc: true`, die Explosion der Schlusspointe `punchline: true`.
+- **Punkte bei Flamme und Strahl:** Je Schuss zählt nur der erste getroffene Zombie als `"bullet"`
+  (mit Punkten). Alle weiteren nehmen denselben Schaden mit der Quelle `"flame"` oder `"beam"`.
+  `bullet_hit` kommt für alle, damit Gegenstände auf der Waffe wirken.
+- **Eröffnungsgag:** gilt für den Schuss aus dem vollen Magazin, samt Zusatzkugel, Explosion und
+  Blitzsprüngen dieses Schusses. **Schlusspointe:** der Schuss, der das Magazin leert, explodiert
+  einmal am ersten Einschlag, ein Schuss ins Leere nicht. Bei Waffen mit einem Schuss je Magazin
+  (Zielgerade, Showfinale) wirken beide bei jedem Schuss.
+- Kein Mündungsfeuer bei Flamme, Strahl und Armbrust (`ViewModel.NO_MUZZLE_FLASH`).
+
+### 24.2 Kameras und Effekte (`upgrade_effects.gd`, `drone.gd`, neu `camera_base.gd`, `cam_tele.gd`, `cam_flash.gd`, `cam_slow.gd`, `cam_director.gd`, `mine.gd`, `upgrade_fx.gd`)
+
+- Ein Knoten je Eintrag aus `Game.cameras`, neu zugeteilt bei `cameras_changed`. Die Kameras teilen
+  sich die Plätze um den Spieler (erst Drohnen, dann Tele, Blitzlicht, Zeitlupe, Regie).
+  `upgrade_effects.cameras` (alle Knoten), `camera_nodes(camera_id)`, Gruppe `"cameras"`.
+- Tele-Linie und Blitz-Kegel zählen in der Waagerechten (die Kameras schweben über den Köpfen).
+  Jeder Durchschlag der Tele-Kamera macht vollen Schaden, eine Wand beendet den Schuss.
+- Zeitlupe wählt zuerst nicht verlangsamte Zombies. Regie hält eine Elite dauerhaft markiert.
+- **Minen:** erst nach `Mine.ARM_TIME` (0,6 s) scharf, eine neue braucht 1,0 m Abstand zu jeder
+  liegenden (`MINE_MIN_SPACING`): Wer stehen bleibt, bekommt eine Mine statt fünf auf einem Fleck.
+  `upgrade_effects.get_mine_count()`, `get_mine_time_left()`, Liste `mines`.
+- **Kaktus-Requisite** wirkt einen Physik-Schritt nach dem Treffer.
+- **Zweite Staffel** (`player.gd`): `revive_charges`, `max_revive_charges`,
+  `get_revive_waves_left() -> Array[int]`. Signal `Events.revive_charges_changed(charges, max)`
+  (Events hat damit 44 Signale). Neue Ladungen kommen leer an.
+- Querschläger würfelt je Treffer und prüft keine Sichtlinie (wie der Kettenblitz).
+
+### 24.3 Oberfläche (`scripts/ui/*`, `main.gd`)
+
+- **Programm:** `scripts/ui/unlock_screen.gd`, Knoten `Main/UnlockScreen` (Ebene 45,
+  `main.unlock_screen`). Elf Karten im Raster, rechts eine Tafel zum markierten Paket. Ein Klick auf
+  die Karte markiert nur, gekauft wird mit dem Knopf, Enter oder Leertaste. `open()`, `close()`,
+  Signal `closed`, `is_open()`, `select(pack_id)`, `buy(pack_id)`, `request_buy(pack_id)`, statisch
+  `pack_state(id)` (`"owned"`, `"buyable"`, `"locked"`), `missing_points(id)`.
+- Kandidatenwahl und Game Over: Knopf „Programm“ und Taste P (`open_program()`,
+  Signal `program_requested`). Game Over zeigt „Aufs Konto“ und „Kontostand“ und nennt Kameras im Build.
+- HUD: Kameras als Zeilen in der Buff-Anzeige (`camera_entries`), Ladungen der Zweiten Staffel
+  (`revive_box`, `revive_pips`). Rucksack: fertige Werte einer Kamera (`camera_stats_text(entry)`),
+  „Darauf wirken“, eigene Hinweise für Kamera-Zubehör.
+
+### 24.4 Ton
+
+61 Dateien statt 40 (zehn Schüsse, vier Kameratypen, Mine gelegt und ausgelöst, Zweite Staffel,
+Paketkauf, Gutschrift `bank_coins`, Querschläger, Kaktus). Der Drohnenschuss kommt jetzt über
+`camera_fired`. Flamme und Strahl sind 0,4 s lange gleichförmige Stücke, die sich überlappen
+(`STREAM_GAP` 0,12 s), ihr Treffer-Ton ist gedrosselt.
+
+### 24.5 Zusammenbau und Prüfung
+
+- `run_tests.ps1`: 21 Dateien, alle bestanden (neu: `test_cameras_core`, `test_progress`,
+  `test_unlock_screen`).
+- `tests/perf_game.gd` misst jetzt die zehn neuen Waffen, Gegenstände an der Waffe (`_attach`
+  legt sie so, dass der Stern trifft), alle Kameratypen, Minen und eine Welle mit sechs Waffen.
+  Ergebnis: kein Shader-Ruckler, 21 Material-Arten in `data/shader_warmup.json`. Ein Waffenwechsel
+  mit vollem Rucksack kostet ein Bild von etwa 30 ms (`sync_build`): Im Spiel passiert das nur beim
+  Schließen des Rucksacks.
+- `perf_game.gd` und `capture_game.gd` schalten `Game.progress_file_enabled` ab: Werkzeuge fassen
+  den echten Spielstand nie an. Wer mit Bildschirm Proben fährt, tut das auch.
+- Einmal mit Bildschirm durchgespielt (Probe, kein Test im Repo): Kisten bieten im frischen Spiel
+  nur den Startvorrat, Raumkauf, Welle mit Kameras, Game Over mit Gutschrift, Paketkauf,
+  `user://progress.cfg` wird geschrieben und enthält Konto, Pakete, beste Welle und Läufe.
+
+### 24.6 Bauchtasche (Nachtrag 2026-11-21)
+
+Viertes Rucksack-Teil `bag_tiny` (Bauchtasche): genau ein Feld, Gewicht 5, in jeder Kiste
+möglich, von Anfang an frei (`UnlockDefs.START`), Verkaufswert wie die anderen Rucksack-Teile.
+`ItemDefs.ORDER` hat damit 65 Einträge (4 Rucksack-Teile).
+
+### 24.7 Offen
+
+- Nichts davon ist von einem Menschen gespielt oder angehört. Balance der festen Kamerawerte, der
+  neuen Waffen, der Paketpreise und der Kisten-Mischung mit 64 Gegenständen ist nur gerechnet.
+- Zwei Quotenhammer beidhändig sind weiter stärker als jede Zweihandwaffe.
+- Ab der neunten Kamera ragen Kameras in die oberen Bildecken.
+- Abschnitt 13.2 (Baum in `main.gd`), 13.6 und 21 sind älter als dieser Stand: Bei Widerspruch
+  gelten 22 bis 24.

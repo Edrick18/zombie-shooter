@@ -66,6 +66,16 @@ const CAMERA_RECOIL_KICK_DEG: Dictionary = {
 	"sniper": 3.0,
 	"minigun": 0.18,
 	"rocket_launcher": 3.4,
+	"burst_pistol": 0.5,
+	"nail_gun": 0.22,
+	"machine_pistol": 0.3,
+	"crossbow": 1.8,
+	"grenade_launcher": 2.4,
+	"flamethrower": 0.05,
+	"beam": 0.04,
+	"tesla": 1.2,
+	"lmg": 0.45,
+	"auto_shotgun": 1.6,
 }
 ## Abklingen des Kamera-Rückstoßes (1/s) und höchster aufgestauter Rückstoß in Grad.
 const CAMERA_RECOIL_RECOVERY: float = 10.0
@@ -78,6 +88,9 @@ const POINTS_KILL: int = 60
 const POINTS_HEADSHOT_KILL_BONUS: int = 30
 const POINTS_ELITE_KILL: int = 150
 const DOOR_COST: int = 750
+## Preise der vier kaufbaren Räume in der Reihenfolge ihrer Zonen 2 bis 5: Backstage, Kantine,
+## Garderobe, Regieraum. Der erste Eintrag ist DOOR_COST.
+const DOOR_COSTS: Array[int] = [DOOR_COST, 1250, 2000, 3000]
 
 # --- Waffen allgemein (Tabelle in weapon_defs.gd) ---
 const WEAPON_RANGE: float = 60.0
@@ -164,11 +177,26 @@ const WAVE_COUNT_PER_WAVE: int = 4
 const SPRINTER_SHARE_STEPS: Array = [[3, 20], [6, 35]]
 ## Elite-Anzahl (zusätzlich): [ab Welle, Anzahl], aufsteigend. Der letzte passende Eintrag gilt.
 const ELITE_COUNT_STEPS: Array = [[2, 1], [6, 2], [10, 3]]
+## Zombies gleichzeitig: MAX_ZOMBIES_ALIVE bis Welle 10, danach je Welle
+## MAX_ZOMBIES_ALIVE_PER_LATE_WAVE mehr, höchstens MAX_ZOMBIES_ALIVE_CAP.
 const MAX_ZOMBIES_ALIVE: int = 24
+const MAX_ZOMBIES_ALIVE_PER_LATE_WAVE: int = 2
+const MAX_ZOMBIES_ALIVE_CAP: int = 48
 ## Spawn-Abstand: max(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_BASE - SPAWN_INTERVAL_PER_WAVE * Welle).
 const SPAWN_INTERVAL_BASE: float = 1.5
 const SPAWN_INTERVAL_PER_WAVE: float = 0.1
 const SPAWN_INTERVAL_MIN: float = 0.4
+## Ab Welle 12 wird der Abstand je Welle um SPAWN_INTERVAL_LATE_PER_WAVE kürzer, bis zum Boden
+## SPAWN_INTERVAL_FLOOR. Vorher blieb der Nachschub ab Welle 11 gleich.
+const SPAWN_INTERVAL_LATE_FROM_WAVE: int = 11
+const SPAWN_INTERVAL_LATE_PER_WAVE: float = 0.02
+const SPAWN_INTERVAL_FLOOR: float = 0.15
+## Schaden der Zombies: ab Welle ZOMBIE_DAMAGE_FROM_WAVE je Welle ZOMBIE_DAMAGE_PER_WAVE mehr.
+const ZOMBIE_DAMAGE_FROM_WAVE: int = 5
+const ZOMBIE_DAMAGE_PER_WAVE: float = 0.05
+## Sprinter werden ab Welle 10 je Welle schneller, bleiben aber langsamer als der sprintende Spieler.
+const SPRINTER_SPEED_PER_LATE_WAVE: float = 0.05
+const SPRINTER_SPEED_MAX: float = 6.4
 ## Vom Vertrag offen gelassen: Abstand vom Ursprung, in dem Zombies erscheinen, wenn das Level
 ## keinen aktiven Spawnpunkt hat (nur für Tests ohne Level von Bedeutung).
 const SPAWN_FALLBACK_DISTANCE: float = 12.0
@@ -180,9 +208,19 @@ const SPAWN_WEIGHT_OFFSET: float = 6.0
 const SPAWN_JITTER: float = 0.3
 const INTERMISSION_SECONDS: float = 12.0
 const FIRST_WAVE_DELAY: float = 4.0
-## Effekt-Faktor: max(EFFECT_FACTOR_MIN, EFFECT_FACTOR_SHARE * Lebens-Faktor).
+## Effekt-Faktor für feste Schadenswerte (Druckwelle, Gift, Discokugel, Störsender, nicht mehr
+## für Kameras: Die haben seit Abschnitt 22 feste Werte je Rarität): bis
+## Welle 10 EFFECT_FACTOR_SHARE mal Lebens-Faktor (mindestens EFFECT_FACTOR_MIN). Danach wächst er
+## je Welle nur noch mit EFFECT_FACTOR_LATE_MULTIPLIER, also langsamer als das Leben der Zombies
+## (HP_FACTOR_LATE_MULTIPLIER). Früher hielt er für immer Schritt: Mit genug Drohnen war das Spiel
+## dann nicht mehr zu verlieren.
 const EFFECT_FACTOR_SHARE: float = 0.75
 const EFFECT_FACTOR_MIN: float = 1.0
+const EFFECT_FACTOR_LATE_MULTIPLIER: float = 1.04
+## Begleiter (Discokugeln, Kameras seit Abschnitt 22 nicht mehr): Bei n gleichen Begleitern macht jeder nur
+## 1 / n hoch COMPANION_STACK_EXPONENT seines Schadens. Mit 0,5 sind vier Drohnen zusammen so
+## stark wie zwei einzelne, zehn so stark wie gut drei.
+const COMPANION_STACK_EXPONENT: float = 0.5
 
 # --- Kisten ---
 const RARITY_BRONZE: int = 0
@@ -224,6 +262,54 @@ const PLAYER_HANDS: int = 2
 ## Faktor auf den Waffenschaden je Rarität (Gewöhnlich bis Legendär).
 const WEAPON_RARITY_DAMAGE: Array[float] = [1.0, 1.25, 1.5, 1.8, 2.2]
 
+# --- Neue Gegenstände (Abschnitt 19) ---
+## Kantinenessen: so lange wirkt das Gift nach dem letzten Treffer.
+const POISON_DURATION: float = 4.0
+## Glücksrad: Faktor eines kritischen Treffers.
+const CRIT_MULTIPLIER: float = 2.0
+## Teleprompter: Faktor auf die Streuung der Waffe.
+const SCOPE_SPREAD_FACTOR: float = 0.5
+## Sicherheitsglas: Sekunden ohne Schaden, bis das Schild lädt, und Punkte je Sekunde beim Laden.
+const SHIELD_RECHARGE_DELAY: float = 5.0
+const SHIELD_RECHARGE_RATE: float = 20.0
+## Störsender: Abstand der Elektroschläge in Sekunden.
+const JAMMER_INTERVAL: float = 4.0
+## Notausgang: Tempo und Dauer des Ausweichsprungs.
+const DASH_SPEED: float = 16.0
+const DASH_TIME: float = 0.18
+## Discokugel: Abstand zum Spieler, Umlauf in Radiant je Sekunde, Abstand zweier Treffer am
+## selben Zombie in Sekunden und Trefferradius.
+const DISCO_ORBIT_RADIUS: float = 2.2
+const DISCO_ORBIT_SPEED: float = 2.6
+const DISCO_HIT_INTERVAL: float = 0.5
+const DISCO_HIT_RADIUS: float = 0.9
+
+# --- Ausbau 3 (Abschnitt 22.3): neue Gegenstände ---
+## Verlangsamung (Trockeneis, Zeitlupen-Kamera): Elite spürt nur diesen Anteil, und langsamer als
+## um SLOW_MAX wird kein Zombie.
+const SLOW_ELITE_FACTOR: float = 0.5
+const SLOW_MAX: float = 0.9
+## Trockeneis: so lange bleibt ein getroffener Zombie langsamer (Sekunden).
+const FROST_DURATION: float = 2.0
+## Schlusspointe: Radius der Explosion der letzten Kugel.
+const PUNCHLINE_RADIUS: float = 3.0
+## Querschläger: Umkreis für das zweite Ziel und Anteil am Schaden des Treffers.
+const RICOCHET_RADIUS: float = 6.0
+const RICOCHET_DAMAGE_FACTOR: float = 0.6
+## Kaktus-Requisite: Umkreis um den Spieler.
+const THORNS_RADIUS: float = 2.5
+## Zweite Staffel: Anteil des Maximal-Lebens nach dem Aufstehen, Sekunden Unverwundbarkeit und
+## die Druckwelle (Umkreis, Stärke des Wegstoßens in m/s am Rand, Schaden: keiner).
+const REVIVE_HP_SHARE: float = 0.3
+const REVIVE_INVULNERABILITY: float = 1.5
+const REVIVE_SHOCKWAVE_RADIUS: float = 6.0
+const REVIVE_SHOCKWAVE_KNOCKBACK: float = 12.0
+const REVIVE_SHOCKWAVE_DAMAGE: float = 0.0
+## Requisitenbombe: höchstens so viele Minen zugleich, Auslöse-Abstand und Radius der Explosion.
+const MINE_MAX_ACTIVE: int = 5
+const MINE_TRIGGER_RADIUS: float = 1.2
+const MINE_RADIUS: float = 3.0
+
 # --- Rucksack (Abschnitt 16) ---
 ## Größtes Raster des Rucksacks in Feldern.
 const BACKPACK_COLS: int = 7
@@ -263,6 +349,8 @@ const EXPLOSION_CHAIN_DELAY: float = 0.12
 const SHOCKWAVE_COOLDOWN: float = 3.0
 ## Vom Vertrag offen gelassen: Stärke des Wegstoßens (m/s) am Rand der Druckwelle.
 const SHOCKWAVE_KNOCKBACK: float = 9.0
+## Reichweite der Kameradrohne ohne Zoom. Die geltende Reichweite jeder Kamera steht in
+## Game.cameras (CameraDefs), diese Zahl ist nur noch der Grundwert zum Nachschlagen.
 const DRONE_RANGE: float = 15.0
 ## Vom Vertrag offen gelassen: Flughöhe der Drohne über den Füßen des Spielers.
 const DRONE_HOVER_HEIGHT: float = 2.4
@@ -272,7 +360,9 @@ const DRONE_SCAN_INTERVAL: float = 0.1
 const STORM_FRONT_MAX_PROCS_PER_SHOT: int = 6
 
 # --- Level ---
-## Raummaße als Vector3(Breite X, Höhe Y, Tiefe Z) in Metern.
-const ZONE1_SIZE: Vector3 = Vector3(22.0, 5.0, 18.0)
+## Raummaße als Vector3(Breite X, Höhe Y, Tiefe Z) in Metern. ZONE1_SIZE ist die Bühne (bis
+## Ausbau 3: 22 × 18 m, seitdem rund 40 % mehr Fläche), ZONE2_SIZE gilt für jeden der vier
+## kaufbaren Räume.
+const ZONE1_SIZE: Vector3 = Vector3(26.5, 5.0, 21.0)
 const ZONE2_SIZE: Vector3 = Vector3(14.0, 5.0, 12.0)
 const STAGE_HEIGHT: float = 0.4

@@ -1,11 +1,12 @@
 extends Control
 ## Modul: Oberfläche (scripts/ui).
-## Einstellungen (Ansicht im Pausemenü): Mausempfindlichkeit, Sichtfeld, Fenstermodus, VSync,
-## Bildraten-Grenze, Auflösungs-Skalierung, Kantenglättung, FPS-Anzeige.
+## Einstellungen (Ansicht im Pausemenü): Lautstärke, Mausempfindlichkeit, Sichtfeld, Fenstermodus,
+## VSync, Bildraten-Grenze, Auflösungs-Skalierung, Kantenglättung, FPS-Anzeige.
 ##
 ## Jede Zeile ist entweder ein Regler mit Wertanzeige oder ein Knopf, der beim Klick zum nächsten
-## Wert weiterschaltet. Jede Änderung wirkt sofort (Settings.apply_video) und wird beim Loslassen
-## des Reglers, beim Klick auf einen Knopf und beim Schließen gespeichert (Settings.save).
+## Wert weiterschaltet. Jede Änderung wirkt sofort (Settings.apply_video, Settings.apply_audio)
+## und wird beim Loslassen des Reglers, beim Klick auf einen Knopf und beim Schließen gespeichert
+## (Settings.save).
 ## Das Pausemenü baut diese Ansicht, zeigt sie über open() und hört auf closed.
 
 const UiStyle := preload("res://scripts/ui/hud.gd")
@@ -15,7 +16,7 @@ signal closed
 
 # --- Optik-Zahlen (Koordinaten relativ zur Mitte der Bühne oben) ---
 const ROW_START_Y: float = 140.0
-const ROW_STEP: float = 50.0
+const ROW_STEP: float = 46.0
 const CAPTION_WIDTH: float = 330.0
 const CONTROL_WIDTH: float = 250.0
 const CONTROL_HEIGHT: float = 38.0
@@ -24,6 +25,9 @@ const FOOTER_BUTTON_SIZE: Vector2 = Vector2(250.0, 60.0)
 ## Zeilen in der Reihenfolge der Anzeige. kind "slider": min, max, step und scale (Anzeige =
 ## Wert * scale) und suffix. kind "cycle": values und names (gleich lang).
 const ROWS: Array[Dictionary] = [
+	{"id": "master_volume", "caption": "LAUTSTÄRKE", "kind": "slider",
+		"min": 0.0, "max": 100.0, "step": 5.0, "scale": 100.0, "suffix": " %",
+		"hint": "Lautstärke aller Geräusche. 0 % ist stumm, 80 % ist der Standard."},
 	{"id": "mouse_sensitivity", "caption": "MAUS-EMPFINDLICHKEIT", "kind": "slider",
 		"min": 10.0, "max": 300.0, "step": 5.0, "scale": 100.0, "suffix": " %",
 		"hint": "Wie schnell sich der Blick mit der Maus dreht. 100 % ist der Standard."},
@@ -105,6 +109,7 @@ func refresh() -> void:
 ## Setzt eine Einstellung über ihren Setter in Settings und wendet sie an.
 func set_setting(id: String, value: Variant) -> void:
 	Settings.set_value(id, value)
+	Settings.apply_audio()
 	if is_inside_tree():
 		Settings.apply_video(get_window())
 
@@ -208,6 +213,7 @@ func _on_cycler_pressed(row: Dictionary) -> void:
 
 func _on_reset_pressed() -> void:
 	Settings.reset_to_defaults()
+	Settings.apply_audio()
 	if is_inside_tree():
 		Settings.apply_video(get_window())
 	Settings.save()

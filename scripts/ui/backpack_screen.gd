@@ -6,6 +6,9 @@ extends CanvasLayer
 ## zwei Hände, Anzeige über dem Raster). Gegenstände mit Sternen wirken nur auf die Waffen, die auf
 ## ihren Sternfeldern liegen: Jedes Sternfeld bekommt einen Stern in der Farbe seines Gegenstands,
 ## gefüllt mit Waffe darauf, sonst nur als Umriss (star_marks).
+## Kameras (Abschnitt 22.1) liegen ebenfalls im Raster. Die Sterne der Kamera-Gegenstände
+## leuchten nur auf Kameras, der Stern der Wiederholung auf Upgrade-Gegenständen und Kameras.
+## Die Info-Tafel einer Kamera nennt ihre fertigen Werte aus Game.cameras.
 ##
 ## Der Bildschirm zeigt Game.backpack und ändert ihn nur über dessen Regeln (place, merge, store)
 ## und über Game.sell_item. Nach jeder gelungenen Änderung ruft er Game.sync_build(). Er öffnet
@@ -29,6 +32,7 @@ const Balance := preload("res://scripts/core/balance.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
 const BackpackState := preload("res://scripts/core/backpack_state.gd")
+const CameraDefs := preload("res://scripts/core/camera_defs.gd")
 
 const LAYER: int = 15
 
@@ -63,10 +67,18 @@ const NO_HAND_TEXT: String = "Keine Hand frei: erst eine Waffe in die Ablage leg
 const NO_TWO_HANDS_TEXT: String = "Keine zwei Hände frei: erst die Waffe in die Ablage legen"
 ## So lange bleibt die Warnung nach einem abgelehnten Ablegen stehen (Sekunden).
 const NOTICE_TIME: float = 4.0
-const INFO_IDLE_TEXT: String = "Mit der Maus über einen Gegenstand fahren zeigt seine Wirkung.\n\nWaffen im Raster hältst du in der Hand: höchstens zwei Hände.\n\nEin Gegenstand mit Sternen wirkt nur auf Waffen, die auf seinen Sternen liegen.\n\nRucksack-Teile an den Rand legen: Sie werden zu neuen Feldern."
+const INFO_IDLE_TEXT: String = "Mit der Maus über einen Gegenstand fahren zeigt seine Wirkung.\nWaffen im Raster hältst du in der Hand: höchstens zwei Hände.\nEin Gegenstand mit Sternen wirkt nur auf Waffen, die auf seinen Sternen liegen.\nKameras schießen von selbst. Ihr Zubehör wirkt auf die Kamera auf seinen Sternen.\nRucksack-Teile an den Rand legen: Sie werden zu neuen Feldern."
+## Abstand zwischen den Absätzen der Erklärung (jede Zeile von INFO_IDLE_TEXT ist ein Absatz).
+const INFO_IDLE_PARAGRAPH_GAP: int = 9
 ## Schriftgröße des Wirkungstexts in der Info-Tafel und der (längeren) Erklärung ohne Gegenstand.
 const INFO_TEXT_SIZE: int = 17
 const INFO_IDLE_SIZE: int = 14
+## Schriftgrößen der Info-Tafel für [Wirkungstext, Zusatzzeilen], von groß nach klein: Es gilt
+## das erste Paar, mit dem alles in die Tafel passt.
+const INFO_FIT_SIZES: Array[Array] = [[17, 15], [16, 14], [15, 14], [14, 13], [13, 12], [12, 11]]
+## Abstand zwischen den Teilen der Info-Tafel und Zeilenabstand ihrer Labels.
+const INFO_SEPARATION: float = 6.0
+const INFO_LINE_SPACING: float = 3.0
 ## Sterne: Radius in der Ecke eines belegten Feldes und in der Mitte eines freien Feldes, Anteil
 ## des inneren Radius, Abstand mehrerer Sterne auf demselben Feld.
 const STAR_RADIUS_CORNER: float = 9.5
@@ -81,6 +93,8 @@ const PIP_SIZE: Vector2 = Vector2(8.0, 6.0)
 const PIP_GAP: float = 3.0
 const NAME_FONT_SIZE: int = 14
 const NAME_MIN_FONT_SIZE: int = 10
+## So weit unter der Oberkante beginnt der Name einer Kamera (darüber sitzen die Sterne).
+const CAMERA_NAME_TOP: float = 17.0
 ## Namen der Werte, die Verstärker erhöhen (ItemDefs.stat).
 const STAT_NAMES: Dictionary = {"damage": "Waffenschaden", "reload": "Nachladetempo", "points": "Punkte"}
 
@@ -111,9 +125,50 @@ const NAME_HYPHENS: Dictionary = {
 	"spotlight": "Schein|wer'fer",
 	"speed_loader": "La'de|hil'fe",
 	"piggy_bank": "Spar|schwein",
+	"extra_shot": "Zu'ga'be",
+	"poison": "Kan'ti'nen|es'sen",
+	"crit": "Glücks|rad",
+	"big_mag": "Über|län'ge",
+	"scope": "Te'le|promp'ter",
+	"fire_rate": "Schnell|durch'lauf",
+	"shield": "Si'cher'heits|glas",
+	"kill_heal": "Trost|pflas'ter",
+	"disco_ball": "Dis'co|ku'gel",
+	"jammer": "Stör|sen'der",
+	"dash": "Not|aus'gang",
+	"replay": "Wie'der|ho'lung",
+	"bag_tiny": "Bauch|ta'sche",
 	"bag_small": "Ju'te|beu'tel",
 	"bag_medium": "Sport|ta'sche",
 	"bag_large": "Rei'se|kof'fer",
+	# Abschnitt 22: neue Gegenstände, Kameras, Kamera-Gegenstände und Waffen.
+	"frost": "Tro'cken|eis",
+	"opener": "Er'öff'nungs|gag",
+	"punchline": "Schluss|poin'te",
+	"ricochet": "Quer|schlä'ger",
+	"thorns": "Kak'tus-Re'qui'si'te",
+	"revive": "Zwei'te Staf'fel",
+	"snack": "Pau'sen|snack",
+	"mine": "Re'qui'si'ten|bom'be",
+	"cam_tele": "Te'le-Ka'me'ra",
+	"cam_flash": "Blitz|licht-Ka'me'ra",
+	"cam_slow": "Zeit|lu'pen-Ka'me'ra",
+	"cam_director": "Re'gie-Ka'me'ra",
+	"cam_lens": "Gro'ßes Ob'jek'tiv",
+	"cam_zoom": "Zoom",
+	"cam_battery": "Ak'ku|pack",
+	"cam_second": "Zweit|ka'me'ra",
+	"cam_uplink": "Sen'de|lei'tung",
+	"burst_pistol": "Drei'er|pack",
+	"nail_gun": "Büh'nen|bau",
+	"machine_pistol": "Wer'be|block",
+	"crossbow": "Ziel|ge'ra'de",
+	"grenade_launcher": "Knall|ef'fekt",
+	"flamethrower": "Hei'ße Pha'se",
+	"beam": "Rot|licht",
+	"tesla": "Kurz|schluss",
+	"lmg": "Ma'ra'thon|sen'dung",
+	"auto_shotgun": "Zu'schau'er|fra'ge",
 }
 
 ## Gezeichnete Fläche für Raster, Ablage und Verkaufsfeld. Nimmt die Maus an.
@@ -486,6 +541,11 @@ func describe(uid: int) -> Dictionary:
 			extra.append("Liegt in der Ablage: Du hältst sie nicht in der Hand.")
 			if not pack.has_free_hands(uid):
 				extra.append(_no_hands_text(uid) + ".")
+	elif ItemDefs.is_camera(id):
+		if placed:
+			extra.append_array(_camera_notes(uid))
+		else:
+			extra.append("Liegt in der Ablage und filmt noch nicht.")
 	else:
 		if not placed:
 			extra.append("Liegt in der Ablage und wirkt noch nicht.")
@@ -495,8 +555,23 @@ func describe(uid: int) -> Dictionary:
 			if ItemDefs.has_stars(id):
 				if active:
 					extra.append("Wirkt auf: %s" % _names_of(targets))
+				elif ItemDefs.is_replay(id):
+					extra.append("Wirkt gerade auf keinen Gegenstand: Stern auf einen Upgrade-Gegenstand oder eine Kamera legen.")
+				elif ItemDefs.is_camera_mod(id):
+					extra.append("Wirkt gerade auf keine Kamera: Stern auf eine Kamera legen.")
 				else:
 					extra.append("Wirkt gerade auf keine Waffe: Stern auf eine Waffe legen.")
+			elif CameraDefs.is_mod(id):
+				# Sendeleitung: wirkt ohne Sterne auf jede Kamera im Rucksack.
+				var camera_count: int = Game.cameras.size()
+				if camera_count <= 0:
+					extra.append("Wirkt gerade auf keine Kamera: Es liegt keine im Rucksack.")
+				else:
+					extra.append("Wirkt auf %s." % ("eine Kamera" if camera_count == 1 else "%d Kameras" % camera_count))
+			# Eine Wiederholung auf diesem Gegenstand: Er zählt mehrfach.
+			var copies: int = pack.copy_levels(uid).size()
+			if copies > 1:
+				extra.append("Zählt %d-fach durch die Wiederholung." % copies)
 			# Verstärker nennen ihren Beitrag nur, solange sie wirken.
 			if active and not ItemDefs.stat(id).is_empty():
 				var stat_name: String = str(STAT_NAMES.get(ItemDefs.stat(id), ItemDefs.stat(id)))
@@ -513,8 +588,56 @@ func describe(uid: int) -> Dictionary:
 	}
 
 
+## Zeilen der Info-Tafel für eine eingeräumte Kamera: ihre fertigen Werte aus Game.cameras
+## (Schaden, Abstand, Reichweite und je nach Typ Durchschlag, Verlangsamung, Mehr-Schaden,
+## zweites Ziel), wie viele Exemplare durch Wiederholungen filmen und was auf sie wirkt.
+func _camera_notes(uid: int) -> PackedStringArray:
+	var notes: PackedStringArray = PackedStringArray()
+	var pack: BackpackState = Game.backpack
+	var entry: Dictionary = Game.camera_entry("%d:0" % uid)
+	if not entry.is_empty():
+		notes.append("Jetzt: %s" % camera_stats_text(entry))
+	var copies: int = pack.copy_levels(uid).size()
+	if copies > 1:
+		notes.append("Zählt %d-fach durch die Wiederholung: %d Kameras filmen." % [copies, copies])
+	var mods: String = _names_of(pack.mods_of(uid))
+	var uplinks: int = Game.upgrades.copies(CameraDefs.MOD_UPLINK).size()
+	if uplinks > 0:
+		var uplink_name: String = ItemDefs.display_name(CameraDefs.MOD_UPLINK)
+		var uplink_text: String = uplink_name if uplinks == 1 else "%d × %s" % [uplinks, uplink_name]
+		mods = uplink_text if mods.is_empty() else "%s, %s" % [mods, uplink_text]
+	notes.append("Kein Gegenstand wirkt darauf." if mods.is_empty() else "Darauf wirken: %s" % mods)
+	return notes
+
+
+## Die fertigen Werte einer Kamera als eine Zeile, aus einem Eintrag von Game.cameras:
+## "Schaden 21 · alle 0,8 s · Reichweite 18 m", dazu je nach Kamera "Durchschlag 2",
+## "Verlangsamung 30 %", "Markierte nehmen 20 % mehr Schaden" und "zweites Ziel 40 %".
+static func camera_stats_text(entry: Dictionary) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	var damage: float = float(entry.get("damage", 0.0))
+	if damage > 0.0:
+		parts.append("Schaden %s" % UpgradeDefs.format_number(snappedf(damage, 0.1)))
+	parts.append("alle %s s" % UpgradeDefs.format_number(float(entry.get("interval", 0.0))))
+	parts.append("Reichweite %s m" % UpgradeDefs.format_number(snappedf(float(entry.get("range", 0.0)), 0.1)))
+	var pierce: int = int(entry.get("pierce", 0))
+	if pierce > 0:
+		parts.append("Durchschlag %d" % pierce)
+	var slow: float = float(entry.get("slow", 0.0))
+	if slow > 0.0:
+		parts.append("Verlangsamung %s %%" % UpgradeDefs.format_percent(slow))
+	var mark: float = float(entry.get("mark", 0.0))
+	if mark > 0.0:
+		parts.append("Markierte nehmen %s %% mehr Schaden" % UpgradeDefs.format_percent(mark))
+	var second: float = float(entry.get("second", 0.0))
+	if second > 0.0:
+		parts.append("zweites Ziel %s %%" % UpgradeDefs.format_percent(second))
+	return " · ".join(parts)
+
+
 ## Alle Sterne, die gerade gezeichnet werden: je Stern { "cell": Vector2i, "owner": int (uid des
-## Gegenstands), "lit": bool (gefüllt: dort liegt eine Waffe), "preview": bool (Stern des
+## Gegenstands), "lit": bool (gefüllt: dort liegt etwas, worauf der Stern wirkt: eine Waffe, bei
+## Kamera-Zubehör eine Kamera, bei der Wiederholung ein Gegenstand oder eine Kamera), "preview": bool (Stern des
 ## gehaltenen Gegenstands an der Stelle der Vorschau), "focus": bool (hervorgehoben) }.
 ## Sterne außerhalb des Rasters fehlen. Der gehaltene Gegenstand hat nur Sterne, solange er über
 ## dem Raster schwebt (und nicht zusammengelegt wird). Eine gehaltene Waffe, die an der Stelle der
@@ -526,13 +649,16 @@ func star_marks() -> Array[Dictionary]:
 	var preview: Dictionary = drop_preview()
 	var preview_kind: int = int(preview.get("kind", PREVIEW_BAD))
 	var weapon_cells: Array[Vector2i] = []
-	var weapon_moves: bool = not preview.is_empty() and preview_kind == PREVIEW_FIT and ItemDefs.is_weapon(held_id)
+	# Ein gehaltener Gegenstand, der an der Stelle der Vorschau passt, zählt dort: Sterne anderer
+	# Gegenstände leuchten, wenn sie auf ihn wirken würden (Waffen-Sterne auf eine Waffe, der Stern
+	# der Wiederholung auf einen Upgrade-Gegenstand).
+	var weapon_moves: bool = not preview.is_empty() and preview_kind == PREVIEW_FIT and ItemDefs.has(held_id) and not ItemDefs.is_bag(held_id)
 	if weapon_moves:
 		weapon_cells = preview["cells"]
 	# Ohne gehaltenen Gegenstand: Sterne des Gegenstands unter dem Zeiger und Sterne auf der Waffe
 	# unter dem Zeiger sind hervorgehoben.
 	var hover_cells: Array[Vector2i] = []
-	if _held_uid == -1 and _hover_uid != -1 and ItemDefs.is_weapon(str(pack.item(_hover_uid).get("id", ""))):
+	if _held_uid == -1 and _hover_uid != -1 and not pack.mods_of(_hover_uid).is_empty():
 		hover_cells = pack.cells_of(_hover_uid)
 	for entry: Dictionary in pack.placed_items():
 		var uid: int = int(entry["uid"])
@@ -542,9 +668,10 @@ func star_marks() -> Array[Dictionary]:
 			if not BackpackState.in_bounds(cell):
 				continue
 			var lit: bool = pack.is_star_lit(uid, cell)
+			var would_hit: bool = weapon_cells.has(cell) and ItemDefs.star_hits(str(entry["id"]), held_id)
 			if weapon_moves:
-				lit = weapon_cells.has(cell) or (lit and pack.occupant(cell) != _held_uid)
-			var focus: bool = weapon_cells.has(cell)
+				lit = would_hit or (lit and pack.occupant(cell) != _held_uid)
+			var focus: bool = would_hit
 			if _held_uid == -1:
 				focus = uid == _hover_uid or (lit and hover_cells.has(cell))
 			marks.append({"cell": cell, "owner": uid, "lit": lit, "preview": false, "focus": focus})
@@ -553,7 +680,7 @@ func star_marks() -> Array[Dictionary]:
 			if not BackpackState.in_bounds(cell):
 				continue
 			var other: int = pack.occupant(cell)
-			var hits: bool = other != -1 and other != _held_uid and ItemDefs.is_weapon(str(pack.item(other)["id"]))
+			var hits: bool = other != -1 and other != _held_uid and ItemDefs.star_hits(held_id, str(pack.item(other)["id"]))
 			marks.append({"cell": cell, "owner": _held_uid, "lit": hits, "preview": true, "focus": true})
 	return marks
 
@@ -750,7 +877,7 @@ func _build_info(stage: Control) -> void:
 	column.name = "Info"
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.clip_contents = true
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", int(INFO_SEPARATION))
 	var inner: Rect2 = INFO_RECT.grow_individual(-18.0, -12.0, -16.0, -12.0)
 	UiStyle.anchor_box(column, Vector2.ZERO, inner.position, inner.size)
 	stage.add_child(column)
@@ -963,6 +1090,7 @@ func _update_info() -> void:
 		uid = _new_uid
 	var info: Dictionary = describe(uid) if uid != -1 else {}
 	info_text_label.add_theme_font_size_override("font_size", INFO_IDLE_SIZE if info.is_empty() else INFO_TEXT_SIZE)
+	info_text_label.add_theme_constant_override("paragraph_spacing", INFO_IDLE_PARAGRAPH_GAP if info.is_empty() else 0)
 	if info.is_empty():
 		info_name_label.add_theme_font_size_override("font_size", 25)
 		_set_info_line(info_name_label, "SO GEHT ES")
@@ -980,6 +1108,42 @@ func _update_info() -> void:
 	_set_info_line(info_text_label, str(info["text"]))
 	_set_info_line(info_extra_label, str(info["extra"]))
 	_set_info_line(info_sell_label, str(info["sell"]))
+	_fit_info(info)
+
+
+## Wählt die Schriftgrößen von Wirkungstext und Zusatzzeilen so, dass die ganze Tafel in ihren
+## Rahmen passt (lange Texte wie bei der Regie-Kamera mit Wiederholung bekommen kleinere Schrift).
+func _fit_info(info: Dictionary) -> void:
+	var width: float = INFO_RECT.size.x - 34.0
+	var available: float = INFO_RECT.size.y - 24.0
+	var name_size: int = info_name_label.get_theme_font_size("font_size")
+	var fixed: float = _wrapped_height(info_name_label.text, name_size, width, true) \
+			+ _wrapped_height(str(info["subtitle"]), 15, width, false) + _wrapped_height(str(info["sell"]), 15, width, false)
+	var parts: int = 3
+	for key: String in ["text", "extra"]:
+		if not str(info[key]).is_empty():
+			parts += 1
+	fixed += INFO_SEPARATION * float(parts - 1)
+	var chosen: Array = INFO_FIT_SIZES[INFO_FIT_SIZES.size() - 1]
+	for sizes: Array in INFO_FIT_SIZES:
+		var needed: float = fixed + _wrapped_height(str(info["text"]), int(sizes[0]), width, false) \
+				+ _wrapped_height(str(info["extra"]), int(sizes[1]), width, false)
+		if needed <= available:
+			chosen = sizes
+			break
+	info_text_label.add_theme_font_size_override("font_size", int(chosen[0]))
+	info_extra_label.add_theme_font_size_override("font_size", int(chosen[1]))
+
+
+## Höhe eines Texts, den ein Label in dieser Breite umbricht (mit dem Zeilenabstand des Labels).
+## 0 für einen leeren Text.
+func _wrapped_height(text: String, font_size: int, width: float, slanted: bool) -> float:
+	if text.is_empty():
+		return 0.0
+	var font: Font = UiStyle.show_font(slanted)
+	var line_height: float = maxf(font.get_height(font_size), 1.0)
+	var lines: float = maxf(roundf(font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, width, font_size).y / line_height), 1.0)
+	return lines * line_height + (lines - 1.0) * INFO_LINE_SPACING
 
 
 func _set_info_line(label: Label, text: String) -> void:
@@ -1591,6 +1755,9 @@ func _draw_item_label(canvas: Control, id: String, rot: int, origin: Vector2, ce
 		area = Rect2(box.position + Vector2(6.0, 16.0), Vector2(box.size.x - 12.0, box.size.y - 22.0 - pips_height))
 		if box.size.x <= cell + 0.5:
 			area = Rect2(box.position + Vector2(6.0, 25.0), Vector2(cell - 12.0, cell - 28.0))
+	elif ItemDefs.is_camera(id):
+		# Auf einer Kamera leuchten oben rechts die Sterne ihres Zubehörs: Der Name rückt darunter.
+		area = Rect2(box.position + Vector2(6.0, CAMERA_NAME_TOP), Vector2(box.size.x - 12.0, box.size.y - CAMERA_NAME_TOP - 6.0 - pips_height))
 	var layout: Dictionary = name_layout(id, area.size.x, area.size.y)
 	var lines: PackedStringArray = layout["lines"]
 	var font_size: int = int(layout["size"])

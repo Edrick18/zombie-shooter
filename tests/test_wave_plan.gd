@@ -116,7 +116,23 @@ func _test_spawn_interval() -> void:
 	_check_float(WavePlan.spawn_interval(5), 1.0, "Spawn-Abstand Welle 5")
 	_check_float(WavePlan.spawn_interval(10), 0.5, "Spawn-Abstand Welle 10")
 	_check_float(WavePlan.spawn_interval(11), 0.4, "Spawn-Abstand Welle 11")
-	_check_float(WavePlan.spawn_interval(25), 0.4, "Spawn-Abstand Welle 25 (Mindestwert)")
+	_check_float(WavePlan.spawn_interval(11), 0.4, "Spawn-Abstand Welle 11")
+	_check_float(WavePlan.spawn_interval(12), 0.38, "Spawn-Abstand Welle 12: ab hier je Welle 0,02 s kürzer")
+	_check_float(WavePlan.spawn_interval(20), 0.22, "Spawn-Abstand Welle 20")
+	_check_float(WavePlan.spawn_interval(25), 0.15, "Spawn-Abstand Welle 25 (Boden)")
+	_check_float(WavePlan.spawn_interval(60), 0.15, "Spawn-Abstand Welle 60 (Boden)")
+	# Zombies gleichzeitig: 24 bis Welle 10, dann je Welle 2 mehr, höchstens 48.
+	_check(WavePlan.max_alive(1) == 24 and WavePlan.max_alive(10) == 24, "Bis Welle 10 leben höchstens 24 Zombies gleichzeitig.")
+	_check(WavePlan.max_alive(11) == 26 and WavePlan.max_alive(15) == 34, "Danach je Welle 2 mehr.")
+	_check(WavePlan.max_alive(22) == 48 and WavePlan.max_alive(60) == 48, "Höchstens 48 gleichzeitig.")
+	# Schaden der Zombies: ab Welle 5 je Welle 5 % mehr.
+	_check_float(WavePlan.damage_factor(1), 1.0, "Schadens-Faktor Welle 1")
+	_check_float(WavePlan.damage_factor(5), 1.0, "Schadens-Faktor Welle 5")
+	_check_float(WavePlan.damage_factor(10), 1.25, "Schadens-Faktor Welle 10")
+	_check_float(WavePlan.damage_factor(33), 2.4, "Schadens-Faktor Welle 33")
+	_check_float(WavePlan.zombie_damage("walker"), 20.0, "Schaden Schlurfer ohne Welle")
+	_check_float(WavePlan.zombie_damage("walker", 33), 48.0, "Schaden Schlurfer Welle 33")
+	_check_float(WavePlan.zombie_damage("elite", 10), 35.0 * 1.25, "Schaden Elite Welle 10")
 
 
 ## Effekt-Faktor: 0.75 * Lebens-Faktor, mindestens 1.
@@ -126,7 +142,12 @@ func _test_effect_factor() -> void:
 	_check_float(WavePlan.effect_factor(4), 1.02, "Effekt-Faktor Welle 4")
 	_check_float(WavePlan.effect_factor(5), 1.11, "Effekt-Faktor Welle 5")
 	_check_float(WavePlan.effect_factor(10), 1.56, "Effekt-Faktor Welle 10")
-	_check_float(WavePlan.effect_factor(11), 0.75 * 2.288, "Effekt-Faktor Welle 11")
+	# Ab Welle 11 wächst der Effekt-Faktor je Welle nur noch mal 1,04 (das Leben mal 1,1).
+	_check_float(WavePlan.effect_factor(10), 0.75 * 2.08, "Effekt-Faktor Welle 10")
+	_check_float(WavePlan.effect_factor(11), 0.75 * 2.08 * 1.04, "Effekt-Faktor Welle 11")
+	_check_float(WavePlan.effect_factor(33), 0.75 * 2.08 * pow(1.04, 23.0), "Effekt-Faktor Welle 33")
+	_check(WavePlan.effect_factor(33) / WavePlan.hp_factor(33) < 0.25, "In Welle 33 halten feste Schadenswerte nur noch ein Viertel mit dem Leben der Zombies mit.")
+	_check(WavePlan.effect_factor(33) > WavePlan.effect_factor(20), "Der Effekt-Faktor wächst weiter, nur langsamer.")
 
 
 func _test_zombie_values() -> void:
@@ -146,7 +167,9 @@ func _test_zombie_values() -> void:
 	_check_float(WavePlan.zombie_speed("walker", 1), 1.6, "Tempo Schlurfer Welle 1")
 	_check_float(WavePlan.zombie_speed("walker", 20), 3.0, "Tempo Schlurfer Welle 20")
 	_check_float(WavePlan.zombie_speed("sprinter", 3), 5.0, "Tempo Sprinter")
-	_check_float(WavePlan.zombie_speed("sprinter", 20), 5.0, "Tempo Sprinter bleibt")
+	_check_float(WavePlan.zombie_speed("sprinter", 10), 5.0, "Tempo Sprinter bis Welle 10")
+	_check_float(WavePlan.zombie_speed("sprinter", 20), 5.5, "Tempo Sprinter Welle 20: je Welle 0,05 m/s mehr")
+	_check_float(WavePlan.zombie_speed("sprinter", 60), 6.4, "Tempo Sprinter höchstens 6,4 m/s (der Spieler sprintet 7)")
 	_check_float(WavePlan.zombie_speed("elite", 2), 2.6, "Tempo Elite")
 	_check_float(WavePlan.zombie_damage("walker"), 20.0, "Schaden Schlurfer")
 	_check_float(WavePlan.zombie_damage("sprinter"), 15.0, "Schaden Sprinter")
@@ -157,7 +180,7 @@ func _test_plan() -> void:
 	var plan: Dictionary = WavePlan.plan(6)
 	for key: String in ["wave", "spawns", "total", "hp_factor", "walker_speed", "spawn_interval", "effect_factor"]:
 		_check(plan.has(key), "plan() hat den Schlüssel %s." % key)
-	_check(plan.size() == 7, "plan() hat genau 7 Schlüssel.")
+	_check(plan.size() == 9 and plan.has("max_alive") and plan.has("damage_factor"), "plan() hat genau 9 Schlüssel, darunter max_alive und damage_factor.")
 	_check(int(plan["wave"]) == 6, "plan: Welle 6.")
 	_check(plan["spawns"] == WavePlan.spawn_list(6), "plan: spawns ist die Spawn-Liste.")
 	_check(int(plan["total"]) == 32, "plan: 32 Zombies in Welle 6, waren %s." % plan["total"])

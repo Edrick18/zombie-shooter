@@ -79,6 +79,10 @@
 			"usage": 1
 		},
 		{
+			"key": "T:albedo_texture,transparency=2",
+			"usage": 1
+		},
+		{
 			"key": "T:albedo_texture,blend_mode=1,cull_mode=2,shading_mode=0,texture_repeat=0,transparency=1",
 			"usage": 1
 		},
@@ -117,6 +121,10 @@
 		{
 			"key": "cull_mode=2,shading_mode=0",
 			"usage": 1
+		},
+		{
+			"key": "blend_mode=1,disable_receive_shadows=1,shading_mode=0,transparency=1,vertex_color_use_as_albedo=1",
+			"usage": 2
 		}
 	],
 	"version": 1

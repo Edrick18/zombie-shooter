@@ -61,6 +61,7 @@ func _run() -> void:
 		_test_held_weapon_stars()
 		_test_hands()
 		_test_weapon_merge_and_sell()
+		await _test_cameras()
 		_test_names(script)
 		_test_hide_signals()
 		await process_frame
@@ -92,7 +93,9 @@ func _state() -> int:
 
 func _level(upgrade_id: String) -> int:
 	var levels: Dictionary = (_game.get("upgrades") as RefCounted).call("levels")
-	return int(levels.get(upgrade_id, 0))
+	# Kameras sind seit Abschnitt 22 keine Upgrades mehr: Ihre Rarität steht in Game.camera_levels().
+	var cameras: Dictionary = _game.call("camera_levels")
+	return maxi(int(levels.get(upgrade_id, 0)), int(cameras.get(upgrade_id, 0)))
 
 
 func _is_open() -> bool:
@@ -907,6 +910,150 @@ func _test_weapon_merge_and_sell() -> void:
 	_check(_loadout().size() == 1 and int(_loadout()[0]["uid"]) == 0, "Game.loadout enthält die Dienstpistole mit der uid 0.")
 
 
+## Kameras im Rucksack (Abschnitt 22.1): fertige Werte in der Info-Tafel, Kamera-Zubehör und
+## Wiederholung auf Kameras, Sterne leuchten nur auf dem, worauf sie wirken.
+## Der Rucksack ohne Kandidat hat die Felder x 1 bis 4, y 1 bis 3. Die Kameradrohne liegt auf
+## (1, 1) und (2, 1).
+func _test_cameras() -> void:
+	_fresh_open(40)
+	var pack: BackpackState = _pack()
+	var drone_name: String = ItemDefs.display_name("drone")
+	var lens_name: String = ItemDefs.display_name("cam_lens")
+	var battery_name: String = ItemDefs.display_name("cam_battery")
+	var drone: int = pack.add_item("drone", 1)
+	var info: Dictionary = _screen.call("describe", drone)
+	_check(str(info["subtitle"]) == ItemDefs.subtitle("drone", 1) and str(info["subtitle"]).contains("Kamera"), "Die Zeile unter dem Namen nennt die Kamera, war: " + str(info["subtitle"]))
+	_check(str(info["text"]) == ItemDefs.description("drone", 1), "Die Tafel zeigt den Text der Kamera.")
+	_check(str(info["extra"]).contains("Ablage") and not str(info["extra"]).contains("Jetzt"), "Eine Kamera in der Ablage filmt nicht und nennt keine Werte, war: " + str(info["extra"]))
+	_check(_put(drone, Vector2i(1, 1)), "Die Kameradrohne liegt im Raster.")
+	_check((_game.get("cameras") as Array).size() == 1, "Game.cameras hat eine Kamera.")
+	info = _screen.call("describe", drone)
+	_check(str(info["extra"]).contains("Jetzt: Schaden 15 · alle 1,2 s · Reichweite 15 m"), "Die Kamera nennt ihre fertigen Werte, war: " + str(info["extra"]))
+	_check(str(info["extra"]).contains("Kein Gegenstand wirkt darauf."), "Ohne Zubehör steht das dabei, war: " + str(info["extra"]))
+	# Großes Objektiv: Sterne links und rechts, der linke liegt auf der Drohne.
+	var lens: int = pack.add_item("cam_lens", 1)
+	_check(_put(lens, Vector2i(3, 1)), "Das Objektiv liegt rechts neben der Drohne.")
+	_check(_is_lit(lens, Vector2i(2, 1)), "Der Stern des Objektivs leuchtet auf der Kamera.")
+	_check(not _mark(lens, Vector2i(4, 1)).is_empty() and not _is_lit(lens, Vector2i(4, 1)), "Der Stern auf dem leeren Feld ist leer.")
+	info = _screen.call("describe", lens)
+	_check(str(info["extra"]).contains("Wirkt auf: " + drone_name), "Das Objektiv nennt die Kamera, war: " + str(info["extra"]))
+	_check(str(info["text"]).contains("Kameras auf den Sternen"), "Der Text des Objektivs nennt die Kameras auf den Sternen, war: " + str(info["text"]))
+	info = _screen.call("describe", drone)
+	_check(str(info["extra"]).contains("Darauf wirken: " + lens_name), "Die Kamera nennt ihr Zubehör, war: " + str(info["extra"]))
+	_check(str(info["extra"]).contains("Jetzt: Schaden 18 ·"), "Mit Objektiv macht die Drohne 18 Schaden, war: " + str(info["extra"]))
+	# Sterne von Kamera-Zubehör leuchten nur auf Kameras: nicht auf einem Gegenstand, nicht auf einer Waffe.
+	var luck: int = pack.add_item("luck", 1)
+	_check(_put(luck, Vector2i(4, 1)), "Der Publikumsliebling liegt auf dem zweiten Stern des Objektivs.")
+	_check(not _is_lit(lens, Vector2i(4, 1)), "Auf einem Gegenstand leuchtet der Stern des Objektivs nicht.")
+	_screen.call("pick_up", luck)
+	_screen.call("drop_on_sell")
+	var pistol: int = pack.add_item("pistol", 1)
+	_check(_put(pistol, Vector2i(4, 1), 1), "Die Pistole liegt hochkant auf dem zweiten Stern des Objektivs.")
+	_check(not _is_lit(lens, Vector2i(4, 1)), "Auf einer Waffe leuchtet der Stern des Objektivs nicht.")
+	_check(not str((_screen.call("describe", pistol) as Dictionary)["extra"]).contains(lens_name), "Das Objektiv wirkt nicht auf die Waffe.")
+	# Umgekehrt leuchtet ein Waffen-Stern nicht auf einer Kamera.
+	var ammo: int = pack.add_item("pierce", 1)
+	_check(_put(ammo, Vector2i(1, 2)), "Die Spezialmunition liegt unter der Drohne.")
+	_check(not _is_lit(ammo, Vector2i(1, 1)) and not _is_lit(ammo, Vector2i(2, 1)), "Die Sterne der Spezialmunition leuchten auf der Kamera nicht.")
+	_check(str((_screen.call("describe", ammo) as Dictionary)["extra"]).contains("Wirkt gerade auf keine Waffe"), "Die Spezialmunition wirkt auf keine Waffe.")
+	_screen.call("pick_up", ammo)
+	_screen.call("drop_on_sell")
+	# Akkupack ohne Kamera auf den Sternen: Der Hinweis nennt die Kamera.
+	var battery: int = pack.add_item("cam_battery", 1)
+	_check(_put(battery, Vector2i(1, 3)), "Der Akkupack liegt abseits der Kamera.")
+	info = _screen.call("describe", battery)
+	_check(str(info["extra"]).contains("Wirkt gerade auf keine Kamera: Stern auf eine Kamera legen."), "Der Akkupack sagt, wohin sein Stern muss, war: " + str(info["extra"]))
+	# Gehalten: Die Vorschau zeigt, ob sein Stern die Kamera trifft (um 90 Grad gedreht liegt ein Stern oben).
+	_screen.call("pick_up", battery)
+	_screen.call("rotate_held")
+	_screen.call("set_pointer", _cell_center(Vector2i(2, 2)))
+	var preview_lit: bool = false
+	var preview_other: bool = false
+	for mark: Dictionary in _marks_of(battery, true):
+		if (mark["cell"] as Vector2i) == Vector2i(2, 1):
+			preview_lit = bool(mark["lit"])
+		elif bool(mark["lit"]):
+			preview_other = true
+	_check(preview_lit, "In der Vorschau leuchtet der Stern des Akkupacks auf der Kamera.")
+	_check(not preview_other, "Die anderen Sterne der Vorschau bleiben leer.")
+	_check(bool(_screen.call("drop_on_cell", Vector2i(2, 2))), "Der Akkupack liegt unter der Drohne.")
+	info = _screen.call("describe", battery)
+	_check(str(info["extra"]).contains("Wirkt auf: " + drone_name), "Jetzt wirkt der Akkupack auf die Kamera, war: " + str(info["extra"]))
+	info = _screen.call("describe", drone)
+	_check(str(info["extra"]).contains("alle 1,04 s"), "Mit Akkupack schießt die Drohne alle 1,04 s, war: " + str(info["extra"]))
+	_check(str(info["extra"]).contains("Darauf wirken: %s, %s" % [lens_name, battery_name]), "Die Kamera zählt ihr Zubehör auf, war: " + str(info["extra"]))
+	# Wiederholung auf der Kamera (um 270 Grad gedreht liegt ihr Stern oben): eine zweite Drohne.
+	var replay: int = pack.add_item("replay", 1)
+	_check(_put(replay, Vector2i(1, 2), 3), "Die Wiederholung liegt unter der Drohne.")
+	_check(_is_lit(replay, Vector2i(1, 1)), "Der Stern der Wiederholung leuchtet auf der Kamera.")
+	_check(str((_screen.call("describe", replay) as Dictionary)["extra"]).contains("Wirkt auf: " + drone_name), "Die Wiederholung nennt die Kamera.")
+	_check((_game.get("cameras") as Array).size() == 2, "Mit der Wiederholung filmen zwei Drohnen.")
+	info = _screen.call("describe", drone)
+	_check(str(info["extra"]).contains("Zählt 2-fach durch die Wiederholung: 2 Kameras filmen."), "Die Kamera nennt die Wiederholung, war: " + str(info["extra"]))
+	_check(str(info["extra"]).contains("Darauf wirken: %s, %s, %s" % [lens_name, battery_name, ItemDefs.display_name("replay")]), "Die Wiederholung steht bei dem, was auf die Kamera wirkt, war: " + str(info["extra"]))
+	# Wiederholung ohne Ziel: Der Hinweis nennt Gegenstand und Kamera.
+	_check(_put(replay, Vector2i(3, 3), 0), "Die Wiederholung liegt jetzt abseits.")
+	info = _screen.call("describe", replay)
+	_check(str(info["extra"]).contains("Stern auf einen Upgrade-Gegenstand oder eine Kamera legen."), "Die Wiederholung sagt, wohin ihr Stern darf, war: " + str(info["extra"]))
+	_check((_game.get("cameras") as Array).size() == 1, "Ohne Wiederholung filmt wieder eine Drohne.")
+	# Sendeleitung: ohne Sterne, wirkt auf jede Kamera.
+	var uplink: int = pack.add_item("cam_uplink", 1)
+	_check(pack.auto_place(uplink), "Die Sendeleitung passt in den Rucksack.")
+	_game.call("sync_build")
+	info = _screen.call("describe", uplink)
+	_check(str(info["extra"]).contains("Wirkt auf eine Kamera."), "Die Sendeleitung nennt die Zahl der Kameras, war: " + str(info["extra"]))
+	info = _screen.call("describe", drone)
+	_check(str(info["extra"]).contains("Darauf wirken: %s, %s, %s" % [lens_name, battery_name, ItemDefs.display_name("cam_uplink")]), "Die Kamera nennt auch die Sendeleitung, war: " + str(info["extra"]))
+	_check(str(info["extra"]).contains("Jetzt: Schaden 19,2 ·"), "Objektiv und Sendeleitung addieren sich (15 mal 1,28), war: " + str(info["extra"]))
+	# Die Tafel folgt dem Zeiger auch auf einer Kamera und hebt ihr Zubehör hervor.
+	_screen.call("set_pointer", _cell_center(Vector2i(1, 1)))
+	_check((_screen.get("info_name_label") as Label).text == drone_name, "Die Tafel zeigt die Kamera unter dem Zeiger.")
+	_check(bool(_mark(lens, Vector2i(2, 1)).get("focus", false)), "Der Stern auf der Kamera unter dem Zeiger ist hervorgehoben.")
+	_screen.call("set_pointer", Vector2(-40.0, -40.0))
+	_check((_screen.get("info_text_label") as Label).text.contains("Kamera"), "Ohne Gegenstand erwähnt die Tafel die Kameras.")
+	# Ohne Kamera im Raster wirkt das Zubehör nicht.
+	_screen.call("pick_up", drone)
+	_check(bool(_screen.call("drop_on_storage")), "Die Drohne geht in die Ablage.")
+	_check((_game.get("cameras") as Array).is_empty(), "Ohne Kamera im Raster ist Game.cameras leer.")
+	_check(str((_screen.call("describe", uplink) as Dictionary)["extra"]).contains("Wirkt gerade auf keine Kamera: Es liegt keine im Rucksack."), "Die Sendeleitung sagt, dass keine Kamera da ist.")
+	_check(str((_screen.call("describe", lens) as Dictionary)["extra"]).contains("Wirkt gerade auf keine Kamera"), "Das Objektiv wirkt auf keine Kamera mehr.")
+	_check(not _is_lit(lens, Vector2i(2, 1)), "Der Stern des Objektivs ist wieder leer.")
+	# Die Werte-Zeile je Kameratyp.
+	var tele: String = str(_screen.call("camera_stats_text", {"damage": 135.0, "interval": 2.6, "range": 30.0, "pierce": 2}))
+	_check(tele == "Schaden 135 · alle 2,6 s · Reichweite 30 m · Durchschlag 2", "Die Tele-Kamera nennt den Durchschlag, war: " + tele)
+	var slow: String = str(_screen.call("camera_stats_text", {"damage": 4.0, "interval": 1.5, "range": 12.0, "slow": 0.3, "second": 0.4}))
+	_check(slow == "Schaden 4 · alle 1,5 s · Reichweite 12 m · Verlangsamung 30 % · zweites Ziel 40 %", "Die Zeitlupen-Kamera nennt Verlangsamung und zweites Ziel, war: " + slow)
+	var director: String = str(_screen.call("camera_stats_text", {"damage": 0.0, "interval": 3.0, "range": 18.0, "mark": 0.2}))
+	_check(director == "alle 3 s · Reichweite 18 m · Markierte nehmen 20 % mehr Schaden", "Die Regie-Kamera nennt den Mehr-Schaden und keinen eigenen Schaden, war: " + director)
+	# Lange Texte (Regie-Kamera mit Wiederholung und Sendeleitung) passen in die Info-Tafel.
+	_fresh_open(41)
+	pack = _pack()
+	var cells: Array[Vector2i] = []
+	for y: int in BackpackState.ROWS:
+		for x: int in BackpackState.COLS:
+			cells.append(Vector2i(x, y))
+	pack.setup(cells)
+	var regie: int = pack.add_item("cam_director", 4)
+	var again: int = pack.add_item("replay", 3)
+	var line: int = pack.add_item("cam_uplink", 1)
+	_check(pack.place(regie, Vector2i(3, 3), 0) and pack.place(again, Vector2i(2, 3), 0) and pack.auto_place(line), "Aufbau: Regie-Kamera, Wiederholung und Sendeleitung liegen im Raster.")
+	_game.call("sync_build")
+	_screen.call("set_pointer", _cell_center(Vector2i(3, 3)))
+	await process_frame
+	await process_frame
+	_check((_screen.get("info_name_label") as Label).text == ItemDefs.display_name("cam_director"), "Die Tafel zeigt die Regie-Kamera.")
+	info = _screen.call("describe", regie)
+	_check(str(info["extra"]).contains("Markierte nehmen 40 % mehr Schaden") and str(info["extra"]).contains("Zählt 2-fach"), "Die Regie-Kamera nennt Markierung und Wiederholung, war: " + str(info["extra"]))
+	_check(not str(info["extra"]).contains("Schaden 0"), "Die Regie-Kamera nennt keinen eigenen Schaden.")
+	var column: Control = _screen.get_node("Root/Stage/Info") as Control
+	_check(column.get_combined_minimum_size().y <= column.size.y + 0.5, "Der ganze Text passt in die Info-Tafel (%d von %d)." % [roundi(column.get_combined_minimum_size().y), roundi(column.size.y)])
+	_check((_screen.get("info_text_label") as Label).get_theme_font_size("font_size") >= 12, "Die Schrift der Tafel bleibt lesbar groß.")
+	_screen.call("set_pointer", Vector2(-40.0, -40.0))
+	await process_frame
+	await process_frame
+	_check(column.get_combined_minimum_size().y <= column.size.y + 0.5, "Auch die Erklärung ohne Gegenstand passt in die Info-Tafel (%d von %d)." % [roundi(column.get_combined_minimum_size().y), roundi(column.size.y)])
+
+
 func _test_names(script: GDScript) -> void:
 	var hyphens: Dictionary = script.get_script_constant_map().get("NAME_HYPHENS", {})
 	var font: Font = (load("res://scripts/ui/hud.gd") as GDScript).call("show_font") as Font
@@ -933,6 +1080,30 @@ func _test_names(script: GDScript) -> void:
 		_check(hyphens.has(id), "Für %s gibt es Trennstellen." % id)
 		_check(str(hyphens.get(id, "")).replace("|", "").replace("'", "") == ItemDefs.display_name(id), "Die Trennstellen von %s passen zum Namen." % id)
 		_check(not "".join(lines).contains("…"), "Der Name von %s passt ungekürzt in ein Feld, war: %s" % [id, " / ".join(lines)])
+	# Kameras: Über ihrem Namen sitzen die Sterne ihres Zubehörs, die Fläche für den Namen ist
+	# deshalb niedriger. Gemessen wird jede Lage, die es im Raster gibt.
+	var camera_top: float = float(script.get_script_constant_map().get("CAMERA_NAME_TOP", 0.0))
+	_check(camera_top > 0.0, "Es gibt den Abstand für die Sterne über dem Namen einer Kamera.")
+	var low: float = cell - camera_top - 6.0 - 13.0
+	var camera_boxes: Dictionary = {
+		"cam_slow": [Vector2(cell - 12.0, low)],
+		"drone": [Vector2(cell * 2.0 - 12.0, low), Vector2(cell - 12.0, cell + low)],
+		"cam_tele": [Vector2(cell * 3.0 - 12.0, low), Vector2(cell - 12.0, cell * 2.0 + low)],
+		"cam_flash": [Vector2(cell * 2.0 - 12.0, low)],
+		"cam_director": [Vector2(cell * 2.0 - 12.0, low)],
+	}
+	for id: String in camera_boxes:
+		_check(ItemDefs.is_camera(id), "%s ist eine Kamera." % id)
+		for box: Vector2 in camera_boxes[id] as Array:
+			var layout: Dictionary = _screen.call("name_layout", id, box.x, box.y)
+			var lines: PackedStringArray = layout["lines"]
+			var fits: bool = not "".join(lines).contains("…")
+			for line: String in lines:
+				if font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1.0, int(layout["size"])).x > box.x + 0.5:
+					fits = false
+			_check(fits and (float(lines.size()) * float(layout["line_height"]) <= box.y + 0.5 or lines.size() == 1),
+				"Der Name von %s passt unter die Sterne (%d x %d), war: %s" % [id, roundi(box.x), roundi(box.y), " / ".join(lines)])
+	_check(camera_boxes.size() == 5, "Alle fünf Kameras sind gemessen.")
 	# Ein Name ohne passende Trennstellen wird nur an Bindestrich und Leerzeichen getrennt und
 	# notfalls gekürzt statt übergelaufen.
 	var narrow: Dictionary = _screen.call("name_layout", "corpse_explosion", 30.0, 12.0)

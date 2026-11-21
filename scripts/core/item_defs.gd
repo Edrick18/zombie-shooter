@@ -3,17 +3,21 @@ extends RefCounted
 ## Reine Daten und Textfunktionen, keine Nodes.
 ## Einbinden mit: const ItemDefs := preload("res://scripts/core/item_defs.gd")
 ##
-## Vier Arten:
+## Fünf Arten:
 ##   "weapon"   Waffe (id = Waffen-ID aus WeaponDefs). Was als Waffe im Raster liegt, hält der
 ##              Spieler in der Hand. Jede Waffe braucht eine oder zwei Hände ("hands").
 ##   "upgrade"  wirkt wie das gleichnamige Upgrade aus UpgradeDefs (id = Upgrade-ID)
 ##   "booster"  Verstärker: gibt einen Zusatzwert
 ##   "bag"      Rucksack-Teil: vergrößert das Raster um seine Form und ist danach verbraucht
+##   "camera"   Kamera (Abschnitt 22.1, id = Kamera-ID aus CameraDefs): Jedes eingeräumte Exemplar
+##              ist im Spiel ein eigener Knoten mit festen Werten je Rarität
 ##
 ## Sterne: Manche Gegenstände wirken nicht für sich, sondern auf das, was auf ihren Sternfeldern
-## liegt ("stars", Felder neben der Form, sie drehen sich mit). Bisher zielen alle Sterne auf
+## liegt ("stars", Felder neben der Form, sie drehen sich mit). Die meisten Sterne zielen auf
 ## Waffen: Der Gegenstand wirkt dann nur für die Waffen, die eines seiner Sternfelder belegen.
-## Ohne Waffe auf einem Stern wirkt er nicht. Gegenstände ohne Sterne wirken immer.
+## Ohne Waffe auf einem Stern wirkt er nicht. Die Sterne der Kamera-Gegenstände zielen genauso auf
+## Kameras, der Stern der Wiederholung auf einen Upgrade-Gegenstand oder eine Kamera.
+## Gegenstände ohne Sterne wirken immer.
 ##
 ## Raritäten: Waffen, Upgrade-Gegenstände und Verstärker haben eine von fünf Raritäten
 ## (Gewöhnlich bis Legendär). Im Code ist das die Zahl 1 bis 5 im Feld "level": Sie ist bei
@@ -28,30 +32,37 @@ extends RefCounted
 const Balance := preload("res://scripts/core/balance.gd")
 const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
+const CameraDefs := preload("res://scripts/core/camera_defs.gd")
 
 const KIND_WEAPON: String = "weapon"
 const KIND_UPGRADE: String = "upgrade"
 const KIND_BOOSTER: String = "booster"
 const KIND_BAG: String = "bag"
+const KIND_CAMERA: String = "camera"
 
-## Worauf Sterne zielen.
+## Worauf Sterne zielen: auf Waffen (Standard) oder auf Upgrade-Gegenstände.
 const STAR_WEAPON: String = "weapon"
+const STAR_ITEM: String = "item"
+const STAR_CAMERA: String = "camera"
 
 ## Gruppen der Upgrade-Gegenstände (bestimmen nur noch die Farbe).
 const TAG_TECH: String = "technik"
 const TAG_FIRE: String = "feuer"
 const TAG_BODY: String = "koerper"
 const TAG_SHOW: String = "show"
+const TAG_CHEMISTRY: String = "chemie"
 const TAG_NAMES: Dictionary = {
-	"technik": "Technik", "feuer": "Feuer", "koerper": "Körper", "show": "Show",
+	"technik": "Technik", "feuer": "Feuer", "koerper": "Körper", "show": "Show", "chemie": "Chemie",
 }
 const TAG_COLORS: Dictionary = {
 	"technik": Color(0.25, 0.85, 1.0), "feuer": Color(1.0, 0.5, 0.15),
 	"koerper": Color(0.4, 0.95, 0.4), "show": Color(1.0, 0.35, 0.75),
+	"chemie": Color(0.72, 0.9, 0.2),
 }
 const BOOSTER_COLOR: Color = Color(1.0, 0.86, 0.2)
 const BAG_COLOR: Color = Color(0.72, 0.58, 0.42)
 const WEAPON_COLOR: Color = Color(0.72, 0.78, 0.9)
+const CAMERA_COLOR: Color = Color(0.58, 0.52, 1.0)
 
 ## Raritäten in aufsteigender Reihenfolge (Index 0 = "level" 1).
 const MAX_RARITY: int = Balance.UPGRADE_MAX_LEVEL
@@ -66,10 +77,18 @@ const STAT_FACTORS: Array[float] = [1.0, 1.5, 2.0, 2.5, 3.0]
 ## Feste Reihenfolge aller Gegenstände (für Listen, Angebote und Tests).
 const ORDER: Array[String] = [
 	"pistol", "revolver", "smg", "sawed_off", "shotgun", "rifle", "sniper", "minigun", "rocket_launcher",
+	"burst_pistol", "nail_gun", "machine_pistol", "crossbow", "grenade_launcher",
+	"flamethrower", "beam", "tesla", "lmg", "auto_shotgun",
 	"chain_lightning", "pierce", "burn", "lifesteal", "max_hp",
-	"corpse_explosion", "reload_shockwave", "drone", "speed", "luck",
-	"spotlight", "speed_loader", "piggy_bank",
-	"bag_small", "bag_medium", "bag_large",
+	"corpse_explosion", "reload_shockwave", "speed", "luck",
+	"extra_shot", "poison", "crit", "big_mag", "scope", "fire_rate",
+	"shield", "kill_heal", "disco_ball", "jammer", "dash",
+	"frost", "opener", "punchline", "ricochet",
+	"thorns", "revive", "snack", "mine",
+	"drone", "cam_tele", "cam_flash", "cam_slow", "cam_director",
+	"cam_lens", "cam_zoom", "cam_battery", "cam_second", "cam_uplink",
+	"spotlight", "speed_loader", "piggy_bank", "replay",
+	"bag_tiny", "bag_small", "bag_medium", "bag_large",
 ]
 
 ## Je Gegenstand:
@@ -77,6 +96,7 @@ const ORDER: Array[String] = [
 ## shape       Felder der Form
 ## hands       Waffen: 1 oder 2 Hände
 ## stars       Sternfelder neben der Form (ungedreht, im Koordinatensystem von shape)
+## star_target worauf die Sterne zielen: STAR_WEAPON (Standard), STAR_ITEM oder STAR_CAMERA
 ## tags        Gruppen (nur Upgrade-Gegenstände, für die Farbe)
 ## name        Name (Waffen nehmen ihn aus WeaponDefs, Upgrade-Gegenstände aus UpgradeDefs)
 ## text        Wirkungstext der Rucksack-Teile
@@ -107,6 +127,41 @@ const ITEMS: Dictionary = {
 		"kind": "weapon", "hands": 2, "weight": 3.0, "min_rarity": 1,
 		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(0, 1), Vector2i(1, 1)],
 	},
+	# --- Abschnitt 22.2: zehn neue Waffen ---
+	"burst_pistol": {"kind": "weapon", "hands": 1, "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1)], "weight": 4.0},
+	"nail_gun": {
+		"kind": "weapon", "hands": 1, "weight": 4.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)],
+	},
+	"machine_pistol": {"kind": "weapon", "hands": 1, "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1)], "weight": 4.0},
+	"crossbow": {
+		"kind": "weapon", "hands": 1, "weight": 4.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(1, 1)],
+	},
+	"grenade_launcher": {
+		"kind": "weapon", "hands": 1, "weight": 3.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(0, 1)],
+	},
+	"flamethrower": {
+		"kind": "weapon", "hands": 2, "weight": 3.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(2, 1), Vector2i(3, 1)],
+	},
+	"beam": {
+		"kind": "weapon", "hands": 2, "weight": 3.0, "min_rarity": 1,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(3, 1)],
+	},
+	"tesla": {
+		"kind": "weapon", "hands": 2, "weight": 3.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(1, 1), Vector2i(2, 1)],
+	},
+	"lmg": {
+		"kind": "weapon", "hands": 2, "weight": 3.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(1, 1), Vector2i(2, 1)],
+	},
+	"auto_shotgun": {
+		"kind": "weapon", "hands": 2, "weight": 3.0, "min_rarity": 1,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(0, 1)],
+	},
 	"chain_lightning": {
 		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1)], "tags": ["technik"], "weight": 10.0,
 		"stars": [Vector2i(-1, 0), Vector2i(1, 0)],
@@ -123,9 +178,94 @@ const ITEMS: Dictionary = {
 	"max_hp": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2)], "tags": ["koerper"], "weight": 10.0},
 	"corpse_explosion": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)], "tags": ["feuer"], "weight": 10.0},
 	"reload_shockwave": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1)], "tags": ["show"], "weight": 10.0},
-	"drone": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["technik"], "weight": 10.0},
 	"speed": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1)], "tags": ["koerper"], "weight": 10.0},
 	"luck": {"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["show"], "weight": 10.0},
+	# --- Abschnitt 19: für die Waffe auf den Sternen ---
+	"extra_shot": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["technik"], "weight": 8.0,
+		"stars": [Vector2i(2, 0), Vector2i(3, 0)],
+	},
+	"poison": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["chemie"], "weight": 8.0,
+		"stars": [Vector2i(-1, -1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(1, 1)],
+	},
+	"crit": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["show"], "weight": 8.0,
+		"stars": [Vector2i(-1, 0), Vector2i(1, 0)],
+	},
+	"big_mag": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["technik"], "weight": 8.0,
+		"stars": [Vector2i(0, -1), Vector2i(1, -1), Vector2i(0, 1), Vector2i(1, 1)],
+	},
+	"scope": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1), Vector2i(1, 1)], "tags": ["show"], "weight": 8.0,
+		"stars": [Vector2i(1, 0)],
+	},
+	"fire_rate": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["technik"], "weight": 8.0,
+		"stars": [Vector2i(-1, 0), Vector2i(2, 0), Vector2i(0, -1), Vector2i(1, -1), Vector2i(0, 1), Vector2i(1, 1)],
+	},
+	# --- Abschnitt 19: für den Spieler als Ganzes ---
+	"shield": {
+		"kind": "upgrade", "tags": ["koerper"], "weight": 8.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)],
+	},
+	"kill_heal": {"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["koerper"], "weight": 8.0},
+	"disco_ball": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1)], "tags": ["show"], "weight": 8.0},
+	"jammer": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1)], "tags": ["technik"], "weight": 8.0},
+	"dash": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["koerper"], "weight": 8.0},
+	# --- Abschnitt 22.3: für die Waffe auf den Sternen ---
+	"frost": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["chemie"], "weight": 8.0,
+		"stars": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1)],
+	},
+	"opener": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1)], "tags": ["show"], "weight": 8.0,
+		"stars": [Vector2i(-1, 0), Vector2i(0, -1)],
+	},
+	"punchline": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1)], "tags": ["feuer"], "weight": 8.0,
+		"stars": [Vector2i(-1, 2), Vector2i(0, 2), Vector2i(1, 2)],
+	},
+	"ricochet": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["technik"], "weight": 8.0,
+		"stars": [Vector2i(1, -1), Vector2i(1, 1)],
+	},
+	# --- Abschnitt 22.3: für den Spieler als Ganzes ---
+	"thorns": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1)], "tags": ["koerper"], "weight": 8.0},
+	"revive": {
+		"kind": "upgrade", "tags": ["show"], "weight": 5.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)],
+	},
+	"snack": {"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["koerper"], "weight": 8.0},
+	"mine": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["feuer"], "weight": 8.0},
+	# --- Abschnitt 22.1: Kameras (eigene Art, feste Werte in CameraDefs) ---
+	"drone": {"kind": "camera", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "weight": 10.0},
+	"cam_tele": {"kind": "camera", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)], "weight": 7.0},
+	"cam_flash": {
+		"kind": "camera", "weight": 7.0,
+		"shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)],
+	},
+	"cam_slow": {"kind": "camera", "shape": [Vector2i(0, 0)], "weight": 7.0},
+	"cam_director": {"kind": "camera", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1)], "weight": 6.0},
+	# --- Abschnitt 22.1: Kamera-Gegenstände (Sterne zielen auf Kameras) ---
+	"cam_lens": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["technik"], "weight": 7.0,
+		"stars": [Vector2i(-1, 0), Vector2i(1, 0)], "star_target": "camera",
+	},
+	"cam_zoom": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(0, 1)], "tags": ["technik"], "weight": 7.0,
+		"stars": [Vector2i(1, 0), Vector2i(1, 1)], "star_target": "camera",
+	},
+	"cam_battery": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0)], "tags": ["technik"], "weight": 7.0,
+		"stars": [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, 1)], "star_target": "camera",
+	},
+	"cam_second": {
+		"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0)], "tags": ["technik"], "weight": 6.0,
+		"stars": [Vector2i(2, 0)], "star_target": "camera",
+	},
+	"cam_uplink": {"kind": "upgrade", "shape": [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1)], "tags": ["technik"], "weight": 6.0},
 	"spotlight": {
 		"kind": "booster", "name": "Scheinwerfer", "shape": [Vector2i(0, 0), Vector2i(1, 0)],
 		"stars": [Vector2i(0, 1), Vector2i(1, 1)],
@@ -139,6 +279,17 @@ const ITEMS: Dictionary = {
 	"piggy_bank": {
 		"kind": "booster", "name": "Sparschwein", "shape": [Vector2i(0, 0)],
 		"stat": "points", "amount": 0.06, "weight": 6.0,
+	},
+	# Wiederholung: Ihr Stern zielt auf einen Upgrade-Gegenstand. Der zählt dann doppelt.
+	"replay": {
+		"kind": "booster", "name": "Wiederholung", "shape": [Vector2i(0, 0)],
+		"stars": [Vector2i(1, 0)], "star_target": "item", "weight": 4.0, "min_rarity": 2,
+		"text": "Der Gegenstand oder die Kamera auf dem Stern wirkt, als läge er zweimal im Rucksack (das zweite Mal höchstens in der Rarität dieser Wiederholung). Wirkt nicht auf Waffen, Verstärker und andere Wiederholungen.",
+	},
+	# Kleinstes Rucksack-Teil: ein einzelnes Feld, passt in jede Lücke am Rand.
+	"bag_tiny": {
+		"kind": "bag", "name": "Bauchtasche", "shape": [Vector2i(0, 0)],
+		"text": "Vergrößert den Rucksack um 1 Feld. An den Rand des Rucksacks legen.", "weight": 5.0,
 	},
 	"bag_small": {
 		"kind": "bag", "name": "Jutebeutel", "shape": [Vector2i(0, 0), Vector2i(1, 0)],
@@ -185,6 +336,11 @@ static func is_bag(id: String) -> bool:
 	return kind(id) == KIND_BAG
 
 
+## Ist das eine Kamera (Kameradrohne, Tele-, Blitzlicht-, Zeitlupen-, Regie-Kamera)?
+static func is_camera(id: String) -> bool:
+	return kind(id) == KIND_CAMERA
+
+
 ## Hände, die eine Waffe braucht (1 oder 2), 0 bei allem anderen.
 static func hands(id: String) -> int:
 	if not is_weapon(id):
@@ -198,6 +354,8 @@ static func display_name(id: String) -> String:
 		return UpgradeDefs.display_name(id)
 	if is_weapon(id):
 		return WeaponDefs.display_name(id)
+	if is_camera(id):
+		return CameraDefs.display_name(id)
 	return str((ITEMS.get(id, {}) as Dictionary).get("name", id))
 
 
@@ -223,7 +381,7 @@ static func tags_text(id: String) -> String:
 
 ## Hat dieser Gegenstand eine Rarität? (Alles außer Rucksack-Teilen.)
 static func has_rarity(id: String) -> bool:
-	return is_weapon(id) or is_upgrade(id) or is_booster(id)
+	return is_weapon(id) or is_upgrade(id) or is_booster(id) or is_camera(id)
 
 
 ## Name der Rarität zu "level" 1 bis 5.
@@ -278,14 +436,41 @@ static func stars(id: String, rot: int = 0) -> Array[Vector2i]:
 	return _rotated(id, "stars", rot)
 
 
-## Worauf die Sterne zielen (bisher immer STAR_WEAPON), "" ohne Sterne.
+## Worauf die Sterne zielen: STAR_WEAPON, STAR_ITEM oder STAR_CAMERA, "" ohne Sterne.
 static func star_target(id: String) -> String:
-	return STAR_WEAPON if has_stars(id) else ""
+	if not has_stars(id):
+		return ""
+	return str((ITEMS.get(id, {}) as Dictionary).get("star_target", STAR_WEAPON))
+
+
+## Kann der Stern von owner_id auf den Gegenstand target_id wirken? Waffen-Sterne wirken auf
+## Waffen, Kamera-Sterne auf Kameras. Gegenstands-Sterne (Wiederholung) wirken auf
+## Upgrade-Gegenstände und auf Kameras.
+static func star_hits(owner_id: String, target_id: String) -> bool:
+	match star_target(owner_id):
+		STAR_WEAPON:
+			return is_weapon(target_id)
+		STAR_ITEM:
+			return is_upgrade(target_id) or is_camera(target_id)
+		STAR_CAMERA:
+			return is_camera(target_id)
+	return false
 
 
 ## Wirkt dieser Upgrade-Gegenstand nur für die Waffen auf seinen Sternen (Kugel-Effekte)?
 static func is_weapon_mod(id: String) -> bool:
-	return is_upgrade(id) and has_stars(id)
+	return is_upgrade(id) and star_target(id) == STAR_WEAPON
+
+
+## Wirkt dieser Upgrade-Gegenstand nur für die Kameras auf seinen Sternen (Objektiv, Zoom,
+## Akkupack, Zweitkamera)? Die Sendeleitung hat keine Sterne und zählt hier nicht.
+static func is_camera_mod(id: String) -> bool:
+	return is_upgrade(id) and star_target(id) == STAR_CAMERA
+
+
+## Ist das die Wiederholung (ihr Stern verdoppelt einen Upgrade-Gegenstand oder eine Kamera)?
+static func is_replay(id: String) -> bool:
+	return is_booster(id) and star_target(id) == STAR_ITEM
 
 
 ## Breite und Höhe der gedrehten Form in Feldern.
@@ -301,7 +486,7 @@ static func cell_count(id: String) -> int:
 
 
 ## Farbe des Gegenstands: Upgrade-Gegenstände nach Gruppe, Verstärker gelb, Waffen stahlblau,
-## Rucksack-Teile braun.
+## Kameras violett, Rucksack-Teile braun.
 static func color(id: String) -> Color:
 	match kind(id):
 		KIND_UPGRADE:
@@ -314,6 +499,8 @@ static func color(id: String) -> Color:
 			return BAG_COLOR
 		KIND_WEAPON:
 			return WEAPON_COLOR
+		KIND_CAMERA:
+			return CAMERA_COLOR
 	return Color.WHITE
 
 
@@ -323,9 +510,13 @@ static func description(id: String, level: int = 1) -> String:
 		var text: String = UpgradeDefs.effect_text(id, clampi(level, 1, MAX_RARITY))
 		if is_weapon_mod(id):
 			text += " Gilt für Waffen auf den Sternen."
+		elif is_camera_mod(id):
+			text += " Gilt für Kameras auf den Sternen."
 		return text
 	if is_weapon(id):
 		return weapon_text(id, level)
+	if is_camera(id):
+		return CameraDefs.effect_text(id, level)
 	if is_booster(id):
 		var percent: String = UpgradeDefs.format_percent(stat_amount(id, level))
 		match stat(id):
@@ -349,9 +540,38 @@ static func weapon_text(id: String, level: int = 1) -> String:
 	var damage_text: String = UpgradeDefs.format_number(snappedf(damage, 0.1))
 	if pellets > 1:
 		damage_text = "%d × %s" % [pellets, damage_text]
-	return "Schaden %s · %s Schuss je Sekunde · Magazin %d · Nachladen %s s. %s" % [
-		damage_text, UpgradeDefs.format_number(float(def.get("fire_rate", 0.0))), int(def.get("magazine", 0)),
-		UpgradeDefs.format_number(float(def.get("reload_time", 0.0))), hand_text]
+	var rate_text: String = "%s Schuss je Sekunde" % UpgradeDefs.format_number(float(def.get("fire_rate", 0.0)))
+	var burst: int = WeaponDefs.burst(id)
+	if burst > 1:
+		rate_text = "%s Salven je Sekunde mit je %d Schuss" % [UpgradeDefs.format_number(float(def.get("fire_rate", 0.0))), burst]
+	return "Schaden %s · %s · Magazin %d · Nachladen %s s. %s%s" % [
+		damage_text, rate_text, int(def.get("magazine", 0)),
+		UpgradeDefs.format_number(float(def.get("reload_time", 0.0))), _weapon_traits(id), hand_text]
+
+
+## Besonderheiten einer Waffe aus Abschnitt 22.2 als Sätze (mit Leerzeichen am Ende), "" wenn
+## sie keine hat.
+static func _weapon_traits(id: String) -> String:
+	var traits: String = ""
+	match WeaponDefs.mode(id):
+		WeaponDefs.MODE_GRENADE:
+			traits += "Granate im Bogen. "
+		WeaponDefs.MODE_FLAME:
+			traits += "Flammen bis %s m, setzt in Brand. " % UpgradeDefs.format_number(WeaponDefs.reach(id))
+		WeaponDefs.MODE_BEAM:
+			traits += "Dauerstrahl durch alle Zombies. "
+	var radius: float = float(WeaponDefs.get_def(id).get("explosion_radius", 0.0))
+	if radius > 0.0:
+		traits += "Explosion %s im Umkreis von %s m. " % [
+			UpgradeDefs.format_number(float(WeaponDefs.get_def(id).get("explosion_damage", 0.0))), UpgradeDefs.format_number(radius)]
+	var pierce: int = WeaponDefs.pierce(id)
+	if pierce == 1:
+		traits += "Durchschlägt einen weiteren Zombie. "
+	elif pierce > 1 and pierce < WeaponDefs.PIERCE_ALL:
+		traits += "Durchschlägt %d weitere Zombies. " % pierce
+	if WeaponDefs.arc_jumps(id) > 0:
+		traits += "Springt auf %d weitere Zombies mit %s %% Schaden. " % [WeaponDefs.arc_jumps(id), UpgradeDefs.format_percent(WeaponDefs.arc_factor(id))]
+	return traits
 
 
 ## Zeile unter dem Namen: "Selten · Technik · 2 Felder", "Selten · Waffe · 1 Hand · 2 Felder",
@@ -368,6 +588,8 @@ static func subtitle(id: String, level: int = 1) -> String:
 			return "%s · Verstärker · %s" % [rarity_name(level), fields]
 		KIND_BAG:
 			return "Rucksack · %s" % fields
+		KIND_CAMERA:
+			return "%s · Kamera · %s" % [rarity_name(level), fields]
 	return ""
 
 

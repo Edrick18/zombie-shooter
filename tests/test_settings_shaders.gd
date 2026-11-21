@@ -1,5 +1,5 @@
 extends SceneTree
-## Tests für die Einstellungen (scripts/game/settings.gd), den Shader-Halter
+## Tests für die Einstellungen (scripts/game/settings.gd, auch die Lautstärke), den Shader-Halter
 ## (scripts/game/fx/shader_keep.gd) und den Regler im Pausemenü.
 ## Die Datei des Nutzers (user://settings.cfg) wird dabei weder gelesen noch geschrieben.
 
@@ -23,6 +23,7 @@ func _run() -> void:
 	_test_settings_values()
 	_test_settings_file()
 	_test_video_settings()
+	_test_volume_setting()
 	_test_material_keys()
 	_test_tracking()
 	_test_list_file()
@@ -129,6 +130,35 @@ func _test_video_settings() -> void:
 	_settings.call("apply_video", root)
 	_check(Engine.max_fps == max_fps_before, "Headless lässt apply_video die Engine in Ruhe.")
 	_settings.call("reset_to_defaults")
+
+
+## Lautstärke: Standard, Begrenzung, Datei (Abschnitt ton) und Wirkung auf den Master-Bus.
+## Ausführlicher in tests/test_audio.gd.
+func _test_volume_setting() -> void:
+	_settings.call("reset_to_defaults")
+	_near(float(_settings.get("master_volume")), 0.8, "Standard-Lautstärke 0,8.")
+	_settings.call("set_master_volume", 3.0)
+	_near(float(_settings.get("master_volume")), 1.0, "Lautstärke höchstens 1,0.")
+	_settings.call("set_master_volume", -0.4)
+	_near(float(_settings.get("master_volume")), 0.0, "Lautstärke mindestens 0,0.")
+	_settings.call("set_value", "master_volume", 0.62)
+	_near(float(_settings.call("get_value", "master_volume")), 0.6, "Lautstärke über den Namen, im Raster von 0,05.")
+	_check(bool(_settings.call("save_to", TEMP_SETTINGS)), "save_to schreibt die Lautstärke.")
+	var written: ConfigFile = ConfigFile.new()
+	written.load(TEMP_SETTINGS)
+	_near(float(written.get_value("ton", "lautstaerke", -1.0)), 0.6, "Die Lautstärke steht im Abschnitt ton.")
+	_settings.call("reset_to_defaults")
+	_settings.call("load_from", TEMP_SETTINGS)
+	_near(float(_settings.get("master_volume")), 0.6, "Lautstärke kommt aus der Datei zurück.")
+	# apply_audio wirkt (anders als apply_video) auch headless.
+	_settings.call("apply_audio")
+	_check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.6)) < 0.01, "apply_audio setzt den Master-Bus.")
+	_settings.call("set_master_volume", 0.0)
+	_settings.call("apply_audio")
+	_check(AudioServer.is_bus_mute(0), "Lautstärke 0 schaltet den Master-Bus stumm.")
+	_settings.call("reset_to_defaults")
+	_settings.call("apply_audio")
+	_check(not AudioServer.is_bus_mute(0), "Mit dem Standard ist der Master-Bus wieder zu hören.")
 
 
 func _test_material_keys() -> void:
@@ -285,7 +315,15 @@ func _test_settings_menu() -> void:
 	var sliders: Dictionary = settings_menu.get("sliders")
 	var cyclers: Dictionary = settings_menu.get("cyclers")
 	var labels: Dictionary = settings_menu.get("value_labels")
-	_check(sliders.has("mouse_sensitivity") and sliders.has("fov") and sliders.has("render_scale"), "Drei Regler: Maus, Sichtfeld, Auflösung.")
+	_check(sliders.has("master_volume") and sliders.has("mouse_sensitivity") and sliders.has("fov") and sliders.has("render_scale"),
+		"Vier Regler: Lautstärke, Maus, Sichtfeld, Auflösung.")
+	if sliders.has("master_volume") and labels.has("master_volume"):
+		var volume_slider: HSlider = sliders["master_volume"] as HSlider
+		_near(float(volume_slider.value), 80.0, "Der Regler Lautstärke steht anfangs auf 80.")
+		volume_slider.value = 35.0
+		_near(float(_settings.get("master_volume")), 0.35, "Der Regler Lautstärke ändert die Einstellung.")
+		_check((labels["master_volume"] as Label).text == "35 %", "Die Anzeige zeigt die Lautstärke, war: " + (labels["master_volume"] as Label).text)
+		_check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.35)) < 0.01, "Der Regler Lautstärke wirkt sofort auf den Master-Bus.")
 	_check(cyclers.has("window_mode") and cyclers.has("vsync") and cyclers.has("fps_limit") and cyclers.has("msaa") and cyclers.has("show_fps"),
 		"Fünf Umschalter: Fenster, VSync, Grenze, Kantenglättung, FPS-Anzeige.")
 	if sliders.has("fov") and cyclers.has("fps_limit") and cyclers.has("show_fps") and cyclers.has("vsync"):
@@ -311,6 +349,8 @@ func _test_settings_menu() -> void:
 		_near(float(_settings.get("fov")), 80.0, "Standard setzt das Sichtfeld zurück.")
 		_check(bool(_settings.get("vsync")) and not bool(_settings.get("show_fps")), "Standard setzt die Umschalter zurück.")
 		_near(float((sliders["fov"] as HSlider).value), 80.0, "Standard stellt auch die Regler zurück.")
+		_near(float(_settings.get("master_volume")), 0.8, "Standard setzt die Lautstärke zurück.")
+		_check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.8)) < 0.01, "Standard wirkt auch auf den Master-Bus.")
 		_check(vsync_button.text == "An" and fps_button.text == "Aus", "Standard stellt auch die Knopftexte zurück.")
 	# Esc führt aus den Einstellungen zurück, erst das zweite Esc setzt das Spiel fort.
 	var escape: InputEventAction = InputEventAction.new()

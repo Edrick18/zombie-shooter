@@ -1,15 +1,15 @@
 extends RefCounted
-## Einstellungen des Spielers, die über das Programmende hinaus gelten: Mausempfindlichkeit,
-## Sichtfeld, Fenstermodus, VSync, Bildraten-Grenze, Auflösungs-Skalierung, Kantenglättung und
-## die FPS-Anzeige.
+## Einstellungen des Spielers, die über das Programmende hinaus gelten: Lautstärke,
+## Mausempfindlichkeit, Sichtfeld, Fenstermodus, VSync, Bildraten-Grenze, Auflösungs-Skalierung,
+## Kantenglättung und die FPS-Anzeige.
 ## Gespeichert in user://settings.cfg (unter Windows: %APPDATA%\Godot\app_userdata\Zombie-Shooter).
 ##
 ## Nur statische Funktionen und Werte. Einbinden mit preload.
 ## Jeder Wert hat einen Setter, der ihn auf den erlaubten Bereich begrenzt. apply_video überträgt
-## die Grafikwerte auf Fenster und Engine. Das Sichtfeld liest der Spieler selbst (jedes Bild),
-## die FPS-Anzeige liest das HUD.
+## die Grafikwerte auf Fenster und Engine, apply_audio die Lautstärke auf den Master-Bus. Das
+## Sichtfeld liest der Spieler selbst (jedes Bild), die FPS-Anzeige liest das HUD.
 ## Headless (Tests) wird die Datei des Nutzers weder gelesen noch geschrieben, und apply_video
-## tut nichts: Tests laufen immer mit den Standardwerten. Mit einem eigenen Pfad lassen sich
+## tut nichts (apply_audio wirkt auch dort): Tests laufen immer mit den Standardwerten. Mit einem eigenen Pfad lassen sich
 ## load_from und save_to trotzdem testen.
 
 const Balance := preload("res://scripts/core/balance.gd")
@@ -17,6 +17,15 @@ const Balance := preload("res://scripts/core/balance.gd")
 const PATH: String = "user://settings.cfg"
 const SECTION_INPUT: String = "eingabe"
 const SECTION_VIDEO: String = "grafik"
+const SECTION_AUDIO: String = "ton"
+
+## Gesamtlautstärke: 0.0 = stumm, 1.0 = volle Lautstärke.
+const MASTER_VOLUME_DEFAULT: float = 0.8
+const MASTER_VOLUME_MIN: float = 0.0
+const MASTER_VOLUME_MAX: float = 1.0
+const MASTER_VOLUME_STEP: float = 0.05
+## Nummer des Master-Busses im AudioServer.
+const MASTER_BUS: int = 0
 
 ## Die Mausempfindlichkeit ist ein Faktor auf Balance.MOUSE_SENSITIVITY: 1.0 = 100 %.
 const MOUSE_SENSITIVITY_DEFAULT: float = 1.0
@@ -46,6 +55,7 @@ const RENDER_SCALE_STEP: float = 0.05
 ## Kantenglättung (MSAA): Index in MSAA_NAMES, entspricht Viewport.MSAA_*.
 const MSAA_NAMES: Array[String] = ["Aus", "2-fach", "4-fach", "8-fach"]
 
+static var master_volume: float = MASTER_VOLUME_DEFAULT
 static var mouse_sensitivity: float = MOUSE_SENSITIVITY_DEFAULT
 static var fov: float = Balance.PLAYER_FOV
 static var window_mode: int = WINDOW_WINDOWED
@@ -64,6 +74,11 @@ static func ensure_loaded() -> void:
 	_loaded = true
 	if _uses_user_file():
 		load_from(PATH)
+
+
+## Setzt die Gesamtlautstärke (0.0 bis 1.0, im Raster von 0.05). Wirkt erst mit apply_audio.
+static func set_master_volume(value: float) -> void:
+	master_volume = clampf(snappedf(value, MASTER_VOLUME_STEP), MASTER_VOLUME_MIN, MASTER_VOLUME_MAX)
 
 
 ## Setzt die Mausempfindlichkeit (auf den erlaubten Bereich und das Raster begrenzt).
@@ -107,6 +122,7 @@ static func set_show_fps(value: bool) -> void:
 ## Wert einer Einstellung über ihren Namen (so heißt auch die Variable), null bei fremdem Namen.
 static func get_value(id: String) -> Variant:
 	match id:
+		"master_volume": return master_volume
 		"mouse_sensitivity": return mouse_sensitivity
 		"fov": return fov
 		"window_mode": return window_mode
@@ -121,6 +137,7 @@ static func get_value(id: String) -> Variant:
 ## Setzt eine Einstellung über ihren Namen. Der Wert läuft durch den Setter (Begrenzung).
 static func set_value(id: String, value: Variant) -> void:
 	match id:
+		"master_volume": set_master_volume(float(value))
 		"mouse_sensitivity": set_mouse_sensitivity(float(value))
 		"fov": set_fov(float(value))
 		"window_mode": set_window_mode(int(value))
@@ -133,6 +150,7 @@ static func set_value(id: String, value: Variant) -> void:
 
 ## Stellt alle Werte auf den Standard zurück (speichert nicht).
 static func reset_to_defaults() -> void:
+	master_volume = MASTER_VOLUME_DEFAULT
 	mouse_sensitivity = MOUSE_SENSITIVITY_DEFAULT
 	fov = Balance.PLAYER_FOV
 	window_mode = WINDOW_WINDOWED
@@ -168,6 +186,15 @@ static func apply_video(window: Window) -> void:
 		window.msaa_3d = msaa as Viewport.MSAA
 
 
+## Überträgt die Lautstärke auf den Master-Bus (bei 0 ist er stumm geschaltet). Wirkt anders
+## als apply_video auch headless.
+static func apply_audio() -> void:
+	var silent: bool = master_volume <= 0.0
+	AudioServer.set_bus_mute(MASTER_BUS, silent)
+	if not silent:
+		AudioServer.set_bus_volume_db(MASTER_BUS, linear_to_db(master_volume))
+
+
 ## Speichert in die Datei des Nutzers. Headless passiert nichts.
 static func save() -> void:
 	if _uses_user_file():
@@ -179,6 +206,7 @@ static func load_from(path: String) -> bool:
 	var config: ConfigFile = ConfigFile.new()
 	if config.load(path) != OK:
 		return false
+	set_master_volume(_number(config, SECTION_AUDIO, "lautstaerke", master_volume))
 	set_mouse_sensitivity(_number(config, SECTION_INPUT, "mausempfindlichkeit", mouse_sensitivity))
 	set_fov(_number(config, SECTION_VIDEO, "sichtfeld", fov))
 	set_window_mode(int(_number(config, SECTION_VIDEO, "fenstermodus", float(window_mode))))
@@ -195,6 +223,7 @@ static func save_to(path: String) -> bool:
 	var config: ConfigFile = ConfigFile.new()
 	# Vorhandene Datei zuerst laden, damit fremde Einträge erhalten bleiben.
 	config.load(path)
+	config.set_value(SECTION_AUDIO, "lautstaerke", master_volume)
 	config.set_value(SECTION_INPUT, "mausempfindlichkeit", mouse_sensitivity)
 	config.set_value(SECTION_VIDEO, "sichtfeld", fov)
 	config.set_value(SECTION_VIDEO, "fenstermodus", window_mode)

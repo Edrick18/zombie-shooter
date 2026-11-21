@@ -145,6 +145,7 @@ func _test_input_map() -> void:
 		"weapon_3": _key(KEY_3),
 		"pause": _key(KEY_ESCAPE),
 		"backpack": _key(KEY_TAB),
+		"dash": _key(KEY_Q),
 	}
 	for action: String in expected:
 		_check(InputMap.has_action(action), "Eingabe-Aktion %s fehlt." % action)
@@ -174,6 +175,9 @@ func _test_event_signals() -> void:
 		"game_over": 1, "run_started": 0,
 		"build_changed": 0, "backpack_opened": 1, "backpack_closed": 0,
 		"loadout_changed": 0, "hand_ammo_changed": 3, "hand_reload_started": 2, "hand_reload_finished": 1,
+		"player_shield_changed": 2, "dash_charges_changed": 2, "player_dashed": 0, "explosion": 2,
+		"cameras_changed": 0, "camera_fired": 2, "mine_placed": 1, "mine_triggered": 1,
+		"player_revived": 0, "revive_charges_changed": 2, "bank_changed": 2, "pack_unlocked": 1,
 	}
 	var found: Dictionary = {}
 	for entry: Dictionary in (_events.get_script() as Script).get_script_signal_list():
@@ -184,7 +188,7 @@ func _test_event_signals() -> void:
 			_check(int(found[signal_name]) == int(expected[signal_name]), "Signal %s hat %d Argumente, erwartet %d." % [signal_name, found[signal_name], expected[signal_name]])
 	for signal_name: String in found:
 		_check(expected.has(signal_name), "Signal %s steht nicht im Vertrag." % signal_name)
-	_check(found.size() == 32, "Events hat genau 32 Signale, waren %d." % found.size())
+	_check(found.size() == 44, "Events hat genau 44 Signale, waren %d." % found.size())
 
 
 func _test_initial_and_start() -> void:
@@ -359,11 +363,16 @@ func _test_chest_choice() -> void:
 	_game.auto_pack = true
 	_game.open_chest(2)
 	var gold_index: int = 0
+	var gold_upgrades: int = 0
 	for i: int in _game.current_offers.size():
-		if ItemDefs.is_upgrade(String(_game.current_offers[i]["id"])):
-			gold_index = i
+		var offered: String = String(_game.current_offers[i]["id"])
+		if ItemDefs.is_upgrade(offered) or ItemDefs.is_camera(offered):
+			gold_upgrades += 1
+			_check(int(_game.current_offers[i]["level"]) == 3, "Gold bietet Upgrade-Gegenstände und Kameras in Rarität 3 an.")
+	_check(gold_upgrades >= 1, "Gold bietet mindestens einen Upgrade-Gegenstand oder eine Kamera an.")
+	# Für die folgenden Prüfungen ein Gegenstand, der ohne Sterne für den Spieler wirkt.
+	_game.current_offers[gold_index] = {"kind": "item", "id": "luck", "level": 3, "owned_level": 0}
 	var gold: Dictionary = _game.current_offers[gold_index]
-	_check(ItemDefs.is_upgrade(String(gold["id"])) and int(gold["level"]) == 3, "Gold bietet einen Upgrade-Gegenstand der Stufe 3 an.")
 	_game.choose_offer(gold_index)
 	_check(_game.state == _game.State.PLAYING and not paused, "Mit auto_pack läuft das Spiel nach der Wahl sofort weiter.")
 	_check(_game.upgrades.get_level(String(gold["id"])) == 3, "Das Upgrade wirkt mit Stufe 3.")
@@ -478,7 +487,7 @@ func _test_pause() -> void:
 
 func _test_end_run() -> void:
 	_game.start_run(8)
-	_game.upgrades.add_levels("drone", 2)
+	_game.upgrades.add_levels("speed", 2)
 	_game.upgrades.add_levels("chain_lightning", 5)
 	_game.upgrades.add_levels("pierce", 5)
 	_events.emit_signal("wave_started", 5, 26)
@@ -491,12 +500,13 @@ func _test_end_run() -> void:
 	_check(paused, "Game Over pausiert das Spiel.")
 	_check(_count("game_over") == overs + 1, "game_over kam genau einmal.")
 	var stats: Dictionary = _last("game_over")[0]
-	for key: String in ["wave", "kills", "points", "upgrades"]:
+	for key: String in ["wave", "kills", "points", "upgrades", "synergies", "character", "items", "cameras", "bank_gained", "bank"]:
 		_check(stats.has(key), "stats hat den Schlüssel %s." % key)
 	_check(int(stats["wave"]) == 5 and int(stats["kills"]) == 1, "stats: Welle 5, 1 Kill, war %s." % [stats])
 	_check(int(stats["points"]) == 760, "stats: 760 verdiente Punkte (Ausgaben zählen nicht ab), waren %s." % stats["points"])
 	var rows: Array = stats["upgrades"]
-	_check(rows.size() == 3 and rows[0] == {"id": "drone", "name": "Kameradrohne", "level": 2}, "stats: Upgrades als id, name, level, war %s." % [rows])
+	_check(rows.size() == 3 and rows[0] == {"id": "speed", "name": "Turbo-Turnschuhe", "level": 2}, "stats: Upgrades als id, name, level, war %s." % [rows])
+	_check(int(stats["bank_gained"]) == 760, "stats: Der Lauf bringt 760 Punkte aufs Konto, waren %s." % stats["bank_gained"])
 	_check(stats.get("synergies", []) == (["storm_front"] as Array[String]), "stats nennt die Synergie.")
 	_check(stats == _game.get_stats(), "get_stats liefert dieselbe Statistik.")
 	_game.end_run()

@@ -56,6 +56,9 @@ func _run() -> void:
 	root.mode = Window.MODE_WINDOWED
 	root.size = WINDOW_SIZE
 	_game = root.get_node("Game")
+	# Dieses Werkzeug darf den echten Spielstand (Konto, Pakete) nie anfassen.
+	_game.set("progress_file_enabled", false)
+	(_game.get("progress") as RefCounted).set("unlock_all", true)
 	_events = root.get_node("Events")
 	_main = (load(MAIN_SCENE) as PackedScene).instantiate()
 	if _main == null or _main.get_script() == null or not _main.has_method("_build_world"):
@@ -78,7 +81,7 @@ func _run() -> void:
 	await _shot_loading()
 	await _shot_start()
 	await _shot_wave()
-	await _shot_door_and_wall_buy()
+	await _shot_door()
 	await _shot_backstage()
 	await _shot_firing()
 	await _shot_chests()
@@ -176,6 +179,14 @@ func _clear_field() -> void:
 
 ## Erzwingt einen Upgrade-Stand und meldet ihn wie im Spiel (HUD, Spieler, Drohne).
 func _set_upgrades(levels: Dictionary) -> void:
+	levels = levels.duplicate()
+	if levels.has("drone"):
+		# Kameras sind keine Upgrades mehr: Die Drohne kommt über den Rucksack (Abschnitt 22.7).
+		var pack: RefCounted = _game.get("backpack") as RefCounted
+		if int(pack.call("highest_level", "drone")) == 0:
+			pack.call("auto_place", int(pack.call("add_item", "drone", int(levels["drone"]))))
+			_game.call("sync_build")
+		levels.erase("drone")
 	var state: UpgradeState = UpgradeState.new()
 	for id: String in levels:
 		state.add_levels(id, int(levels[id]))
@@ -343,7 +354,7 @@ func _shot_effects() -> void:
 	await _save("07_effects")
 
 
-func _shot_door_and_wall_buy() -> void:
+func _shot_door() -> void:
 	await _clear_field()
 	_player().call("heal", 1000.0)
 	_game.call("add_points", 820)
@@ -352,25 +363,20 @@ func _shot_door_and_wall_buy() -> void:
 	await _wait(0.6)
 	_player().call("look_at_point", door.global_position + Vector3(0.0, 1.6, 0.0))
 	await _save("09a_door")
-	var wall_buy: Node3D = _main.get_node("Level/WallBuy_shotgun") as Node3D
-	var front: Vector3 = wall_buy.global_position + wall_buy.global_basis.z * 2.25
-	_place(Vector3(front.x + 0.3, 0.0, front.z), wall_buy.global_position + Vector3(0.0, 0.15, 0.0))
-	await _wait(2.4)
-	_player().call("look_at_point", wall_buy.global_position + Vector3(0.0, 0.15, 0.0))
-	await _save("09b_wallbuy")
 
 
 func _shot_backstage() -> void:
 	var door: Node3D = _door()
 	door.call("open")
 	_game.call("add_points", 400)
-	var wall_buy: Node3D = _main.get_node("Level/WallBuy_smg") as Node3D
+	# Blick vom Eingang quer durch den Backstage-Raum.
+	var room_center: Vector3 = door.global_position + Vector3(7.0, 1.2, 0.5)
 	var stand: Vector3 = Vector3(door.global_position.x + 2.2, 0.0, door.global_position.z - 2.4)
-	_place(stand, wall_buy.global_position + Vector3(2.0, -0.3, 0.0))
-	_spawn("walker", Vector3(wall_buy.global_position.x + 5.5, 0.0, 3.0), 4)
+	_place(stand, room_center)
+	_spawn("walker", Vector3(door.global_position.x + 9.0, 0.0, door.global_position.z + 1.0), 4)
 	await _wait(2.6)
 	_player().call("heal", 1000.0)
-	_player().call("look_at_point", wall_buy.global_position + Vector3(2.0, -0.3, 0.0))
+	_player().call("look_at_point", room_center)
 	await _save("08_backstage")
 
 

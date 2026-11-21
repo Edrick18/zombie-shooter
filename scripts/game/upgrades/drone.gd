@@ -1,21 +1,26 @@
 extends Node3D
 ## Modul: Upgrades (scripts/game/upgrades).
-## Kameradrohne (Upgrade "drone"): eine kleine fliegende TV-Kamera. Sie folgt dem Spieler mit
-## weichem Nachziehen in Balance.DRONE_HOVER_HEIGHT und schießt im Takt der Stufe auf den
-## nächsten Zombie mit freier Sichtlinie in Balance.DRONE_RANGE.
-## Schaden über zombie.take_damage(schaden, {"source": "drone"}). Takt und Schaden kommen aus
-## den Stufenwerten des Upgrades "drone" für die eigene Stufe (level), der Schaden mal
-## Game.effect_factor(). UpgradeEffects erzeugt die Drohnen, hält ihre Stufen aktuell und hängt
-## sie in den Behälter aus Fx.root_of(...).
+## Kameradrohne (Kamera "drone", Abschnitt 22.1): eine kleine fliegende TV-Kamera. Sie folgt dem
+## Spieler mit weichem Nachziehen in Balance.DRONE_HOVER_HEIGHT und schießt in ihrem Takt auf den
+## nächsten Zombie mit freier Sichtlinie in ihrer Reichweite.
+## Schaden über zombie.take_damage(schaden, {"source": "drone"}). Takt, Schaden und Reichweite
+## sind fest: Sie stehen fertig gerechnet im Eintrag der Kamera aus Game.cameras (stats, gesetzt
+## mit set_stats). Kein Game.effect_factor(), kein Abschlag für mehrere Drohnen. Ohne Eintrag
+## gelten die Grundwerte der Rarität (level) aus CameraDefs. UpgradeEffects erzeugt die Drohnen,
+## hält ihre Einträge aktuell und hängt sie in den Behälter aus Fx.root_of(...).
 ##
 ## Mehrere Drohnen (Abschnitt 18: jede Kameradrohne im Rucksack ist eine eigene Drohne):
 ## Jede hat einen Platz (slot, 0 = erste Drohne). Der Platz bestimmt, wo sie um den Spieler
 ## schwebt, wie versetzt sie wippt und wann ihr erster Schuss fällt. Beim Schuss beansprucht sie
 ## ihr Ziel bis zum eigenen nächsten Schuss. Eine andere Drohne nimmt ein beanspruchtes Ziel nur,
 ## wenn sie kein anderes sieht: So verteilen sich die Drohnen auf verschiedene Zombies.
+##
+## Zweitkamera (Schlüssel "second" im Eintrag, Abschnitt 22.1): Jeder Schuss trifft zusätzlich
+## ein zweites Ziel mit diesem Anteil am Schaden. Jeder Schuss meldet sich über
+## Events.camera_fired("drone", position).
 
 const Balance := preload("res://scripts/core/balance.gd")
-const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
+const CameraDefs := preload("res://scripts/core/camera_defs.gd")
 const Fx := preload("res://scripts/game/fx/fx.gd")
 
 ## Gruppe aller Drohnen (für die Absprache der Ziele).
@@ -52,8 +57,14 @@ const NUMBER_COLOR: Color = Color(1.0, 0.45, 0.5)
 const BODY_COLOR: Color = Color(0.82, 0.85, 0.92)
 const ACCENT_COLOR: Color = Color(1.0, 0.82, 0.1)
 
-## Stufe des Upgrades (1 bis 5).
+## Kameratyp aus CameraDefs.
+const CAMERA_ID: String = "drone"
+
+## Rarität der Kamera (1 bis 5).
 var level: int = 1
+## Eintrag dieser Kamera aus Game.cameras (fertige Werte, siehe CameraDefs.stats). Leer: Es gelten
+## die Grundwerte der Rarität. Setzen mit set_stats.
+var stats: Dictionary = {}
 ## Zeigt die Drohne eigene Trefferzahlen? UpgradeEffects schaltet das mit seinen Zahlen gleich.
 var show_damage_numbers: bool = true
 ## Platz dieser Drohne unter allen Drohnen (0 = erste). Setzen mit set_slot.
@@ -94,10 +105,21 @@ func _ready() -> void:
 	tween.tween_property(self, "scale", Vector3.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
-## Setzt die Stufe (1 bis 5). Takt und Schaden richten sich danach.
+## Setzt die Rarität (1 bis 5). Takt und Schaden richten sich danach, bis set_stats die fertigen
+## Werte liefert.
 func set_level(new_level: int) -> void:
 	level = clampi(new_level, 1, Balance.UPGRADE_MAX_LEVEL)
+	if int(stats.get("level", level)) != level:
+		stats = {}
 	# Ein schnellerer Takt gilt sofort, nicht erst nach dem alten Rest.
+	_cooldown_left = minf(_cooldown_left, get_fire_interval())
+
+
+## Setzt die fertigen Werte dieser Kamera: ein Eintrag aus Game.cameras (Schlüssel "level",
+## "damage", "interval", "range"). Die Rarität wird daraus übernommen.
+func set_stats(entry: Dictionary) -> void:
+	stats = entry
+	level = clampi(int(entry.get("level", level)), 1, Balance.UPGRADE_MAX_LEVEL)
 	_cooldown_left = minf(_cooldown_left, get_fire_interval())
 
 
@@ -126,14 +148,31 @@ static func slot_offset(index: int) -> Vector3:
 	return Vector3(sin(angle) * radius, height, cos(angle) * radius)
 
 
-## Sekunden zwischen zwei Schüssen auf dieser Stufe.
+## Sekunden zwischen zwei Schüssen.
 func get_fire_interval() -> float:
-	return UpgradeDefs.value("drone", "interval", level)
+	return float(stats.get("interval", CameraDefs.base(CAMERA_ID, "interval", level)))
 
 
-## Schaden eines Schusses: Stufenwert mal Effekt-Faktor der aktuellen Welle.
+## Schaden eines Schusses: der feste Wert der Kamera (Rarität und Kamera-Gegenstände), ohne
+## Effekt-Faktor und ohne Abschlag für mehrere Drohnen.
 func get_shot_damage() -> float:
-	return UpgradeDefs.value("drone", "damage", level) * Game.effect_factor()
+	return float(stats.get("damage", CameraDefs.base(CAMERA_ID, "damage", level)))
+
+
+## Reichweite in Metern.
+func get_range() -> float:
+	return float(stats.get("range", CameraDefs.base(CAMERA_ID, "range", level)))
+
+
+## Zahl der Drohnen, die gerade unterwegs sind (mindestens 1).
+func get_companion_count() -> int:
+	if not is_inside_tree():
+		return 1
+	var count: int = 0
+	for node: Node in get_tree().get_nodes_in_group(GROUP):
+		if not node.is_queued_for_deletion():
+			count += 1
+	return maxi(count, 1)
 
 
 ## Weltposition der Linse: Von hier gehen Schuss und Sichtlinie aus.
@@ -164,13 +203,27 @@ func release_claim() -> void:
 	_claim_left = 0.0
 
 
+## Anteil des Schadens für das zweite Ziel (Zweitkamera), 0 = kein zweites Ziel.
+func get_second_share() -> float:
+	return maxf(0.0, float(stats.get("second", 0.0)))
+
+
 ## Der nächste lebende Zombie in Reichweite mit freier Sichtlinie, sonst null. Ein Zombie, den
 ## eine andere Drohne gerade beansprucht, kommt nur dran, wenn es kein anderes sichtbares Ziel gibt.
 func find_target() -> Node3D:
-	if not is_inside_tree():
-		return null
+	var found: Array[Node3D] = find_targets(1)
+	return found[0] if not found.is_empty() else null
+
+
+## Bis zu count lebende Zombies in Reichweite mit freier Sichtlinie, in der Reihenfolge der Wahl:
+## erst die, die keine andere Drohne beansprucht (der nächste zuerst), dann die beanspruchten.
+func find_targets(count: int) -> Array[Node3D]:
+	var result: Array[Node3D] = []
+	if not is_inside_tree() or count <= 0:
+		return result
 	var claimed: Dictionary = _claims_of_others()
 	var origin: Vector3 = global_position
+	var reach: float = get_range()
 	var candidates: Array[Node3D] = []
 	var distances: Dictionary = {}
 	for node: Node in get_tree().get_nodes_in_group("zombies"):
@@ -178,20 +231,26 @@ func find_target() -> Node3D:
 		if not _is_alive(zombie):
 			continue
 		var distance: float = origin.distance_to(_center_of(zombie))
-		if distance <= Balance.DRONE_RANGE:
+		if distance <= reach:
 			candidates.append(zombie)
 			distances[zombie.get_instance_id()] = distance
 	candidates.sort_custom(func(a: Node3D, b: Node3D) -> bool:
 		return float(distances[a.get_instance_id()]) < float(distances[b.get_instance_id()]))
-	var shared: Node3D = null
+	var shared: Array[Node3D] = []
 	for zombie: Node3D in candidates:
 		if not _has_line_of_sight(origin, _center_of(zombie)):
 			continue
 		if not claimed.has(zombie.get_instance_id()):
-			return zombie
-		if shared == null:
-			shared = zombie
-	return shared
+			result.append(zombie)
+			if result.size() >= count:
+				return result
+		elif shared.size() < count:
+			shared.append(zombie)
+	for zombie: Node3D in shared:
+		if result.size() >= count:
+			break
+		result.append(zombie)
+	return result
 
 
 ## Ziele, die andere Drohnen gerade beanspruchen: Instanz-ID -> true.
@@ -207,30 +266,42 @@ func _claims_of_others() -> Dictionary:
 
 
 ## Schießt sofort auf das nächste sichtbare Ziel, ohne den Takt zu prüfen (auch für Tests).
+## Mit Zweitkamera bekommt ein zweites sichtbares Ziel den Anteil get_second_share() vom Schaden.
 ## Gibt true zurück, wenn ein Schuss fiel.
 func try_fire() -> bool:
-	var target: Node3D = find_target()
-	if target == null or not target.has_method("take_damage"):
-		return false
-	var hit_position: Vector3 = _center_of(target)
 	var damage: float = get_shot_damage()
 	if damage <= 0.0:
 		return false
-	_aim_point = hit_position
+	var share: float = get_second_share()
+	var targets: Array[Node3D] = find_targets(2 if share > 0.0 else 1)
+	if targets.is_empty() or not targets[0].has_method("take_damage"):
+		return false
+	# Erst alle Ziele und Punkte festlegen, dann Schaden verteilen.
+	var points: PackedVector3Array = PackedVector3Array()
+	for zombie: Node3D in targets:
+		points.append(_center_of(zombie))
+	_aim_point = points[0]
 	_has_aim = true
 	_aim_hold_left = 0.4
-	# Das Ziel gehört bis zum nächsten eigenen Schuss dieser Drohne.
-	_claim_id = target.get_instance_id()
+	# Das erste Ziel gehört bis zum nächsten eigenen Schuss dieser Drohne.
+	_claim_id = targets[0].get_instance_id()
 	_claim_left = get_fire_interval() + CLAIM_MARGIN
 	var from: Vector3 = get_muzzle_position()
 	var fx_root: Node = Fx.root_of(self)
-	Fx.tracer(fx_root, from, hit_position, TRACER_COLOR)
 	if is_instance_valid(_muzzle):
 		Fx.muzzle_flash(_muzzle)
-	if show_damage_numbers:
-		Fx.damage_number(fx_root, hit_position + Vector3(0.0, 0.5, 0.0), damage, NUMBER_COLOR)
 	_play_recoil()
-	target.call("take_damage", damage, {"source": "drone", "hit_position": hit_position})
+	Events.camera_fired.emit(CAMERA_ID, global_position)
+	for i: int in targets.size():
+		# Ein früherer Treffer dieses Schusses kann das zweite Ziel mitgerissen haben.
+		# Erst is_instance_valid: Ein freigegebenes Objekt darf nie an einen typisierten Parameter.
+		if not is_instance_valid(targets[i]) or not _is_alive(targets[i]) or not targets[i].has_method("take_damage"):
+			continue
+		var amount: float = damage if i == 0 else damage * share
+		Fx.tracer(fx_root, from, points[i], TRACER_COLOR)
+		if show_damage_numbers:
+			Fx.damage_number(fx_root, points[i] + Vector3(0.0, 0.5, 0.0), amount, NUMBER_COLOR)
+		targets[i].call("take_damage", amount, {"source": "drone", "hit_position": points[i]})
 	return true
 
 
@@ -253,6 +324,9 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Eine entfernte Drohne hängt bis zum Ende des Bilds noch im Baum: Sie schießt nicht mehr.
+	if is_queued_for_deletion():
+		return
 	var player: Node3D = _player()
 	if player != null:
 		_desired = _clear_of_walls(player, _wanted_position(player))

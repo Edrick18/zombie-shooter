@@ -1,6 +1,7 @@
 extends CharacterBody3D
 ## Modul: Zombies (scripts/game/zombies).
-## Ein Zombie: Leben, Schadensweg (Abschnitt 7), Brand, Rückstoß, Angriff mit Ausholen, Wegfindung.
+## Ein Zombie: Leben, Schadensweg (Abschnitt 7), Brand, Gift (Abschnitt 19.1), Rückstoß, Angriff
+## mit Ausholen, Wegfindung.
 ## Gruppe "zombies" (nur solange er lebt). Der Ursprung des Knotens sind die Füße.
 ##
 ## Aufbau (entsteht in _ready):
@@ -9,7 +10,8 @@ extends CharacterBody3D
 ##   ├─ Body       MeshInstance3D, Rumpf. Trägt alle sichtbaren Teile und wird als Ganzes animiert.
 ##   │   ├─ Head   MeshInstance3D, Kugel. Liegt genau im Kopftreffer-Bereich (über HEADSHOT_HEIGHT_RATIO).
 ##   │   ├─ ArmL / ArmR   Node3D an der Schulter mit je einem Arm nach vorn
-##   │   └─ Flames Node3D, nur bei Brand sichtbar
+##   │   ├─ Flames Node3D, nur bei Brand sichtbar
+##   │   └─ Poison Node3D, grüne Giftblasen. Entsteht erst beim ersten Gift, nur bei Gift sichtbar.
 ##   ├─ NavAgent   NavigationAgent3D
 ##   ├─ Glow       OmniLight3D (nur Elite)
 ##   └─ HealthBar  Node3D (nur Elite), dreht sich zur Kamera
@@ -49,9 +51,24 @@ const ARM_LENGTH_SHARE: float = 0.36
 const ARM_THICKNESS_SHARE: float = 0.085
 const BURN_COLOR: Color = Color(1.0, 0.45, 0.08)
 const FLAME_COLOR: Color = Color(1.0, 0.62, 0.1)
+## Gift: Färbung des Körpers und Farbe der Blasen.
+const POISON_COLOR: Color = Color(0.3, 1.0, 0.2)
+const POISON_BUBBLE_COLOR: Color = Color(0.45, 1.0, 0.25)
+const POISON_BUBBLE_COUNT: int = 5
 const DEATH_COLOR: Color = Color(0.12, 0.1, 0.1)
+## Verlangsamt (Trockeneis, Zeitlupen-Kamera): Der Körper wird eisblau.
+const SLOW_COLOR: Color = Color(0.45, 0.8, 1.0)
+## Markiert (Regie-Kamera): eine kleine pinke Raute, die sich über dem Kopf dreht.
+const MARK_COLOR: Color = Color(1.0, 0.2, 0.75)
+const MARK_SIZE: float = 0.2
+const MARK_GAP: float = 0.28
 const BAR_WIDTH: float = 0.9
 const BAR_HEIGHT: float = 0.09
+
+## Netz und Material der Giftblasen: einmal für alle Zombies (dieselbe Material-Art wie die Flammen).
+static var _poison_bubble_mesh: SphereMesh = null
+## Netz und Material der Markierung teilen sich alle Zombies.
+static var _mark_mesh: PrismMesh = null
 
 ## "walker", "sprinter" oder "elite".
 var zombie_type: String = WavePlan.TYPE_WALKER
@@ -99,6 +116,18 @@ var _walk_speed_now: float = 0.0
 var _burn_dps: float = 0.0
 var _burn_left: float = 0.0
 var _burn_accum: float = 0.0
+var _poison_dps: float = 0.0
+var _poison_left: float = 0.0
+var _poison_accum: float = 0.0
+var _poison_marker: Node3D
+## Verlangsamung: Bruchteil, um den der Zombie langsamer läuft (schon mit Elite-Faktor), und
+## Restzeit in Sekunden.
+var _slow_amount: float = 0.0
+var _slow_left: float = 0.0
+## Markierung: Mehr-Schaden als Bruchteil und Restzeit in Sekunden.
+var _mark_bonus: float = 0.0
+var _mark_left: float = 0.0
+var _mark_marker: Node3D
 var _windup_left: float = -1.0
 var _attack_cooldown_left: float = 0.0
 var _death_left: float = 0.0
@@ -122,7 +151,7 @@ func setup(type: String, wave_number: int) -> void:
 	max_hp = WavePlan.zombie_hp(zombie_type, wave)
 	hp = max_hp
 	move_speed = WavePlan.zombie_speed(zombie_type, wave)
-	attack_damage = WavePlan.zombie_damage(zombie_type)
+	attack_damage = WavePlan.zombie_damage(zombie_type, wave)
 	body_height = Balance.ZOMBIE_HEIGHT * float(def["scale"])
 	body_radius = Balance.ZOMBIE_RADIUS * float(def["scale"])
 
@@ -157,6 +186,10 @@ func _physics_process(delta: float) -> void:
 	_tick_burn(delta)
 	if is_dead:
 		return
+	_tick_poison(delta)
+	if is_dead:
+		return
+	_tick_slow_and_mark(delta)
 	var target: Node3D = _find_target()
 	var direct: Vector3 = Vector3.ZERO
 	var distance: float = INF
@@ -177,10 +210,12 @@ func _physics_process(delta: float) -> void:
 	var stops: bool = reach_clear and distance <= get_attack_range() * Balance.ZOMBIE_ATTACK_STOP_RANGE_FACTOR
 	var walk: Vector3 = Vector3.ZERO
 	if target != null and not stops:
+		# Eine Verlangsamung bremst nur das Laufen, nicht den Schlag.
+		var speed: float = move_speed * get_speed_factor()
 		if _windup_left >= 0.0:
-			walk = direct * move_speed * Balance.ZOMBIE_ATTACK_WINDUP_SPEED_FACTOR
+			walk = direct * speed * Balance.ZOMBIE_ATTACK_WINDUP_SPEED_FACTOR
 		else:
-			walk = _steer(delta, target.global_position, direct) * move_speed
+			walk = _steer(delta, target.global_position, direct) * speed
 	_move(delta, walk)
 	_face(delta, walk, direct, distance)
 	_tick_attack(delta, target, distance, height_diff, reach_clear)
@@ -190,12 +225,17 @@ func _physics_process(delta: float) -> void:
 ## beim tödlichen Treffer). Fällt das Leben auf 0: is_dead, Events.zombie_killed, kurze
 ## Todesanimation, dann queue_free. info siehe Abschnitt 7 ("source" ist Pflicht).
 ## Tote Zombies und Beträge <= 0 werden ignoriert.
+## Ein markierter Zombie (apply_mark) nimmt aus jeder Quelle mehr Schaden: Der Betrag wird hier
+## mit get_damage_factor() multipliziert, und zombie_damaged meldet den erhöhten Betrag.
 func take_damage(amount: float, info: Dictionary) -> void:
 	if is_dead or amount <= 0.0:
 		return
+	amount *= get_damage_factor()
 	hp = maxf(0.0, hp - amount)
-	if String(info.get("source", "")) != "burn":
-		# Brand färbt ohnehin orange, nur echte Treffer blitzen weiß und lassen den Körper zucken.
+	var source: String = String(info.get("source", ""))
+	if source != "burn" and source != "poison":
+		# Brand färbt ohnehin orange und Gift grün, nur echte Treffer blitzen weiß und lassen den
+		# Körper zucken.
 		_flash_left = FLASH_TIME
 		_punch = 1.0
 	_material_dirty = true
@@ -229,6 +269,88 @@ func get_burn_dps(dps_percent: float) -> float:
 	if zombie_type == WavePlan.TYPE_ELITE:
 		dps *= Balance.BURN_ELITE_FACTOR
 	return dps
+
+
+## Vergiftet den Zombie (Kantinenessen, Abschnitt 19.1): dps ist Schaden je Sekunde in
+## Lebenspunkten, schon fertig gerechnet. Ein neuer Aufruf stellt die Dauer neu, der höhere dps
+## gewinnt. Das Gift tickt wie der Brand alle Balance.BURN_TICK_INTERVAL s über take_damage mit
+## source "poison", über die ganze Dauer fällt genau dps * duration Schaden an. Gift und Brand
+## laufen unabhängig voneinander, auch zugleich. Solange das Gift wirkt, ist der Körper grün
+## gefärbt und es steigen grüne Blasen auf.
+func apply_poison(dps: float, duration: float) -> void:
+	if is_dead or dps <= 0.0 or duration <= 0.0:
+		return
+	if _poison_left > 0.0:
+		_poison_dps = maxf(_poison_dps, dps)
+		_poison_left = maxf(_poison_left, duration)
+	else:
+		_poison_dps = dps
+		_poison_left = duration
+		_poison_accum = 0.0
+	_show_poison_marker(true)
+	_material_dirty = true
+
+
+## Ist der Zombie gerade vergiftet?
+func is_poisoned() -> bool:
+	return _poison_left > 0.0
+
+
+## Verlangsamt den Zombie (Trockeneis, Zeitlupen-Kamera, Abschnitt 22): factor ist der Bruchteil,
+## um den er langsamer läuft (0.3 = 30 % langsamer), duration die Dauer in Sekunden. Elite spürt
+## nur Balance.SLOW_ELITE_FACTOR davon. Mehrere Verlangsamungen addieren sich nicht: Die stärkste
+## gilt, und jeder neue Aufruf stellt die Zeit neu (nie kürzer als der Rest). Langsamer als um
+## Balance.SLOW_MAX wird kein Zombie. Der Körper ist solange eisblau.
+func apply_slow(factor: float, duration: float) -> void:
+	if is_dead or factor <= 0.0 or duration <= 0.0:
+		return
+	var amount: float = factor
+	if zombie_type == WavePlan.TYPE_ELITE:
+		amount *= Balance.SLOW_ELITE_FACTOR
+	amount = minf(amount, Balance.SLOW_MAX)
+	if _slow_left > 0.0:
+		_slow_amount = maxf(_slow_amount, amount)
+		_slow_left = maxf(_slow_left, duration)
+	else:
+		_slow_amount = amount
+		_slow_left = duration
+	_material_dirty = true
+
+
+## Ist der Zombie gerade verlangsamt?
+func is_slowed() -> bool:
+	return _slow_left > 0.0
+
+
+## Faktor auf das Lauftempo: 1,0 ohne Verlangsamung, 0,7 bei 30 % (Elite 0,85).
+func get_speed_factor() -> float:
+	return 1.0 - _slow_amount if _slow_left > 0.0 else 1.0
+
+
+## Markiert den Zombie (Regie-Kamera, Abschnitt 22): Solange nimmt er aus jeder Quelle
+## (1 + bonus) mal Schaden. Mehrere Markierungen addieren sich nicht: Die stärkste gilt, und jeder
+## neue Aufruf stellt die Zeit neu (nie kürzer als der Rest). Über dem Kopf dreht sich solange
+## eine pinke Raute.
+func apply_mark(bonus: float, duration: float) -> void:
+	if is_dead or bonus <= 0.0 or duration <= 0.0:
+		return
+	if _mark_left > 0.0:
+		_mark_bonus = maxf(_mark_bonus, bonus)
+		_mark_left = maxf(_mark_left, duration)
+	else:
+		_mark_bonus = bonus
+		_mark_left = duration
+	_show_mark_marker(true)
+
+
+## Ist der Zombie gerade markiert?
+func is_marked() -> bool:
+	return _mark_left > 0.0
+
+
+## Faktor auf jeden Schaden an diesem Zombie: 1,0 ohne Markierung, sonst 1 + Mehr-Schaden.
+func get_damage_factor() -> float:
+	return 1.0 + _mark_bonus if _mark_left > 0.0 else 1.0
 
 
 ## Stößt den Zombie weg: impulse ist eine Geschwindigkeit in m/s, die schnell abklingt.
@@ -301,6 +423,8 @@ func despawn() -> void:
 		return
 	is_dead = true
 	_burn_left = 0.0
+	_clear_poison()
+	_clear_slow_and_mark()
 	remove_from_group("zombies")
 	collision_layer = 0
 	collision_mask = 0
@@ -312,6 +436,8 @@ func _die(info: Dictionary) -> void:
 	_death_left = Balance.ZOMBIE_DEATH_TIME
 	_burn_left = 0.0
 	_burn_accum = 0.0
+	_clear_poison()
+	_clear_slow_and_mark()
 	_windup_left = -1.0
 	_knockback = Vector3.ZERO
 	remove_from_group("zombies")
@@ -353,6 +479,83 @@ func _tick_burn(delta: float) -> void:
 		_material_dirty = true
 		if rest > BURN_EPSILON:
 			take_damage(dps * rest, {"source": "burn"})
+
+
+## Gift: tickt wie der Brand (gleicher Tick-Abstand, Rest am Ende anteilig), mit source "poison".
+func _tick_poison(delta: float) -> void:
+	if _poison_left <= 0.0:
+		return
+	var step: float = minf(delta, _poison_left)
+	_poison_left -= step
+	_poison_accum += step
+	var dps: float = _poison_dps
+	var ends: bool = _poison_left <= BURN_EPSILON
+	var interval: float = Balance.BURN_TICK_INTERVAL
+	while _poison_accum >= interval - BURN_EPSILON and not is_dead:
+		_poison_accum -= interval
+		take_damage(dps * interval, {"source": "poison"})
+	if is_dead:
+		return
+	if ends:
+		var rest: float = _poison_accum
+		_clear_poison()
+		if rest > BURN_EPSILON:
+			take_damage(dps * rest, {"source": "poison"})
+
+
+## Beendet das Gift sofort und nimmt Färbung und Blasen weg (Ablauf, Tod, despawn).
+func _clear_poison() -> void:
+	_poison_left = 0.0
+	_poison_dps = 0.0
+	_poison_accum = 0.0
+	_show_poison_marker(false)
+	_material_dirty = true
+
+
+## Zeigt oder versteckt die Giftblasen. Sie entstehen erst, wenn ein Zombie zum ersten Mal
+## vergiftet wird: Die meisten Zombies brauchen sie nie.
+func _show_poison_marker(shown: bool) -> void:
+	if not is_instance_valid(_poison_marker):
+		if not shown or not is_instance_valid(_mesh):
+			return
+		_build_poison_marker()
+	_poison_marker.visible = shown
+
+
+## Lässt die Zeit von Verlangsamung und Markierung ablaufen.
+func _tick_slow_and_mark(delta: float) -> void:
+	if _slow_left > 0.0:
+		_slow_left -= delta
+		if _slow_left <= 0.0:
+			_slow_left = 0.0
+			_slow_amount = 0.0
+			_material_dirty = true
+	if _mark_left > 0.0:
+		_mark_left -= delta
+		if _mark_left <= 0.0:
+			_mark_left = 0.0
+			_mark_bonus = 0.0
+			_show_mark_marker(false)
+
+
+## Beendet Verlangsamung und Markierung sofort (Tod, despawn).
+func _clear_slow_and_mark() -> void:
+	_slow_left = 0.0
+	_slow_amount = 0.0
+	_mark_left = 0.0
+	_mark_bonus = 0.0
+	_show_mark_marker(false)
+	_material_dirty = true
+
+
+## Zeigt oder versteckt die Raute der Markierung. Sie entsteht erst, wenn ein Zombie zum ersten
+## Mal markiert wird.
+func _show_mark_marker(shown: bool) -> void:
+	if not is_instance_valid(_mark_marker):
+		if not shown or not is_inside_tree():
+			return
+		_build_mark_marker()
+	_mark_marker.visible = shown
 
 
 ## Der lebende Spieler oder null.
@@ -693,6 +896,57 @@ func _build_flames(torso_radius: float) -> void:
 	_mesh.add_child(_flames)
 
 
+## Giftblasen: kleine grüne Kugeln, die am Körper aufsteigen (_animate_poison). Netz und Material
+## teilen sich alle Zombies.
+func _build_poison_marker() -> void:
+	if _poison_bubble_mesh == null:
+		var material: StandardMaterial3D = StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.albedo_color = POISON_BUBBLE_COLOR
+		_poison_bubble_mesh = SphereMesh.new()
+		_poison_bubble_mesh.radius = 0.5
+		_poison_bubble_mesh.height = 1.0
+		_poison_bubble_mesh.radial_segments = 8
+		_poison_bubble_mesh.rings = 4
+		_poison_bubble_mesh.material = material
+	_poison_marker = Node3D.new()
+	_poison_marker.name = "Poison"
+	_poison_marker.visible = false
+	for i: int in POISON_BUBBLE_COUNT:
+		var bubble: MeshInstance3D = MeshInstance3D.new()
+		bubble.name = "Bubble%d" % i
+		bubble.mesh = _poison_bubble_mesh
+		bubble.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_poison_marker.add_child(bubble)
+	_mesh.add_child(_poison_marker)
+	_animate_poison()
+
+
+## Markierung: eine kleine, auf der Spitze stehende Pyramide über dem Kopf (über dem Lebensbalken
+## der Elite). Sie hängt am Zombie selbst, damit sie beim Zucken des Körpers ruhig bleibt.
+func _build_mark_marker() -> void:
+	if _mark_mesh == null:
+		var material: StandardMaterial3D = StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.albedo_color = MARK_COLOR
+		_mark_mesh = PrismMesh.new()
+		_mark_mesh.size = Vector3(MARK_SIZE, MARK_SIZE * 1.3, MARK_SIZE)
+		_mark_mesh.material = material
+	_mark_marker = Node3D.new()
+	_mark_marker.name = "Mark"
+	_mark_marker.visible = false
+	var height: float = body_height + MARK_GAP + (0.5 if is_instance_valid(_bar) else 0.0)
+	_mark_marker.position = Vector3(0.0, height, 0.0)
+	var arrow: MeshInstance3D = MeshInstance3D.new()
+	arrow.name = "Arrow"
+	arrow.mesh = _mark_mesh
+	arrow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Spitze nach unten: Sie zeigt auf den Zombie.
+	arrow.rotation.x = PI
+	_mark_marker.add_child(arrow)
+	add_child(_mark_marker)
+
+
 func _build_glow() -> void:
 	_glow_energy = 1.6
 	_glow = OmniLight3D.new()
@@ -810,6 +1064,9 @@ func _animate_alive(delta: float) -> void:
 	_arm_left.rotation = Vector3(arm_left, 0.0, 0.0)
 	_arm_right.rotation = Vector3(arm_right, 0.0, 0.0)
 	_animate_flames()
+	_animate_poison()
+	if is_instance_valid(_mark_marker) and _mark_marker.visible:
+		_mark_marker.rotation.y = _anim_time * 3.0
 	if is_instance_valid(_glow):
 		_glow.light_energy = _glow_energy * (1.0 + 0.25 * sin(_anim_time * 5.0))
 	if is_instance_valid(_bar):
@@ -865,6 +1122,27 @@ func _animate_flames() -> void:
 	_flames.rotation.y = _anim_time * 2.5
 
 
+## Giftblasen: Jede steigt versetzt vom Bauch bis über den Kopf und wird dabei kleiner.
+func _animate_poison() -> void:
+	if not is_instance_valid(_poison_marker):
+		return
+	var poisoned: bool = _poison_left > 0.0 and not is_dead
+	if _poison_marker.visible != poisoned:
+		_poison_marker.visible = poisoned
+	if not poisoned:
+		return
+	var index: int = 0
+	for child: Node in _poison_marker.get_children():
+		var bubble: Node3D = child as Node3D
+		if bubble != null:
+			var rise: float = fposmod(_anim_time * 0.8 + float(index) / float(POISON_BUBBLE_COUNT), 1.0)
+			var angle: float = float(index) * 2.4 + _anim_time * 0.7
+			var radius: float = body_radius * (1.05 - 0.35 * rise)
+			bubble.position = Vector3(cos(angle) * radius, body_height * (-0.12 + 0.78 * rise), sin(angle) * radius)
+			bubble.scale = Vector3.ONE * body_height * 0.085 * (1.0 - 0.65 * rise)
+		index += 1
+
+
 func _update_health_bar() -> void:
 	var ratio: float = clampf(hp / maxf(max_hp, 0.001), 0.0, 1.0)
 	_bar_fill.scale = Vector3(maxf(ratio, 0.001), 1.0, 1.0)
@@ -876,19 +1154,31 @@ func _update_health_bar() -> void:
 		_bar.global_transform = Transform3D(camera.global_transform.basis.orthonormalized(), _bar.global_position)
 
 
-## Farbe des Körpers aus Grundfarbe, Brand (orange, flackernd), Treffer (weiß) und Tod (dunkel).
+## Farbe des Körpers aus Grundfarbe, Verlangsamung (eisblau), Brand (orange, flackernd), Gift
+## (grün, pulsierend), Treffer (weiß) und Tod (dunkel).
 func _update_material() -> void:
 	var burning: bool = _burn_left > 0.0 and not is_dead
-	var active: bool = burning or _flash_left > 0.0 or is_dead
+	var poisoned: bool = _poison_left > 0.0 and not is_dead
+	var slowed: bool = _slow_left > 0.0 and not is_dead
+	var active: bool = burning or poisoned or _flash_left > 0.0 or is_dead
 	if not active and not _material_dirty:
 		return
 	_material_dirty = active
 	var albedo: Color = _base_color
 	var emission: Color = _base_emission
+	if slowed:
+		# Ruhige Färbung ohne Pulsieren: Sie muss nicht in jedem Bild neu gesetzt werden.
+		albedo = albedo.lerp(SLOW_COLOR, 0.55)
+		emission = emission.lerp(SLOW_COLOR, 0.25)
 	if burning:
 		var flicker: float = 0.5 + 0.5 * sin(_anim_time * 23.0 + _walk_phase)
 		albedo = albedo.lerp(BURN_COLOR, 0.6)
 		emission = emission.lerp(BURN_COLOR, 0.45 + 0.3 * flicker)
+	if poisoned:
+		# Brennt der Zombie zugleich, mischen sich beide Farben: Man sieht beides.
+		var pulse: float = 0.5 + 0.5 * sin(_anim_time * 5.0 + _walk_phase)
+		albedo = albedo.lerp(POISON_COLOR, 0.55)
+		emission = emission.lerp(POISON_COLOR, 0.2 + 0.2 * pulse)
 	if is_dead:
 		var progress: float = 1.0 - clampf(_death_left / Balance.ZOMBIE_DEATH_TIME, 0.0, 1.0)
 		albedo = albedo.lerp(DEATH_COLOR, progress * 0.8)

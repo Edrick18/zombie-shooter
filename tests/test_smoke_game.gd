@@ -5,7 +5,7 @@ extends SceneTree
 ## Geprüft wird der Reihe nach:
 ##   Aufbau, Schuss -> Kill -> Punkte, Elite -> Kiste -> Wahl -> Upgrade, alle zehn Upgrades mit
 ##   erzwungener Stufe im echten Spiel, Synergie bei 5 + 5, Tür (echter Blick-Strahl und Taste E)
-##   mit Spawns der Zone 2 und Pfaden von jedem Spawnpunkt, Wandkäufe, zweiter Lauf in derselben
+##   mit Spawns der Zone 2 und Pfaden von jedem aktiven Spawnpunkt, Waffenfund, zweiter Lauf in derselben
 ##   Szene, drei ganze Wellen mit einem schummelnden Spieler (heilt sich, schießt mit der echten
 ##   Waffe), Tod -> Game Over mit Statistik, Neustart (Szene neu geladen) -> sauberer zweiter Lauf.
 ##
@@ -18,6 +18,7 @@ const Balance := preload("res://scripts/core/balance.gd")
 const WavePlan := preload("res://scripts/core/wave_plan.gd")
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
 const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
+const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const UpgradeState := preload("res://scripts/core/upgrade_state.gd")
 
 const MAIN_SCENE: String = "res://scenes/main.tscn"
@@ -295,7 +296,7 @@ func _test_boot() -> void:
 	_check(String(_weapons().call("get_current_weapon_id")) == "pistol", "Startwaffe ist die Pistole.")
 	_check(get_nodes_in_group("zombies").is_empty() and get_nodes_in_group("chests").is_empty(), "Am Anfang gibt es weder Zombies noch Kisten.")
 	var spawns: Array[Node] = get_nodes_in_group("zombie_spawns")
-	_check(spawns.size() == 5, "Das Level hat 5 Spawnpunkte (sind %d)." % spawns.size())
+	_check(spawns.size() == 11, "Das Level hat 11 Spawnpunkte: 3 auf der Bühne, 2 je Raum (sind %d)." % spawns.size())
 	var active: int = 0
 	for node: Node in spawns:
 		if bool(node.get_meta("active", true)):
@@ -395,12 +396,22 @@ func _test_elite_chest_choice() -> void:
 	_check((choice.get("cards") as Array).size() == 3, "Die Kistenwahl zeigt 3 Karten.")
 	# Jede Kiste bietet Gegenstände an, mindestens einer davon ist ein Upgrade-Gegenstand.
 	var pick: int = -1
+	var has_upgrade: bool = false
 	for i: int in offers.size():
 		_check(String((offers[i] as Dictionary).get("kind", "")) == "item", "Die Kiste bietet Gegenstände an.")
-		if pick == -1 and UpgradeDefs.has(String((offers[i] as Dictionary).get("id", ""))):
-			pick = i
-	_check(pick != -1, "Mindestens ein Angebot ist ein Upgrade-Gegenstand.")
-	pick = maxi(pick, 0)
+		var offered_id: String = String((offers[i] as Dictionary).get("id", ""))
+		if UpgradeDefs.has(offered_id):
+			has_upgrade = true
+			# Gegenstände mit Sternen wirken erst mit einer Waffe darauf: Für die Prüfung der
+			# Wirkung zählt einer, der für den Spieler als Ganzes gilt.
+			if pick == -1 and not ItemDefs.has_stars(offered_id):
+				pick = i
+	_check(has_upgrade, "Mindestens ein Angebot ist ein Upgrade-Gegenstand.")
+	if pick == -1:
+		# Die Kiste bot nur Stern-Gegenstände an: Karte 1 für diese Prüfung durch einen ersetzen,
+		# der für sich wirkt.
+		pick = 0
+		offers[0] = {"kind": "item", "id": "lifesteal", "level": int((offers[0] as Dictionary).get("level", 1)), "owned_level": 0}
 	var offer: Dictionary = offers[pick]
 	var chosen_before: int = _count("upgrade_chosen")
 	# Der Gesamttest räumt selbst ein (Game.auto_pack), der Rucksack-Bildschirm bleibt zu.
@@ -573,7 +584,13 @@ func _effect_reload_shockwave() -> void:
 
 
 func _effect_drone() -> void:
-	await _set_upgrades({"drone": 5})
+	await _set_upgrades({})
+	# Seit Abschnitt 22 ist die Kameradrohne eine Kamera: Sie kommt über den Rucksack ins Spiel
+	# (Game.cameras), nicht mehr über Game.upgrades.
+	var backpack: RefCounted = _game.get("backpack")
+	var drone_uid: int = int(backpack.call("add_item", "drone", 5))
+	_check(drone_uid > 0 and bool(backpack.call("auto_place", drone_uid)), "Die Kameradrohne passt in den Rucksack.")
+	_game.call("sync_build")
 	_reset_player()
 	var effects: Node = _main.get("upgrade_effects") as Node
 	var has_drone: bool = await _wait_until(func() -> bool: return is_instance_valid(effects.get("drone")), 1.0)
@@ -589,9 +606,11 @@ func _effect_drone() -> void:
 		return false, 6.0)
 	_check(killed, "Die Drohne tötet einen Zombie (source drone).")
 	_check(not _alive(target), "Das Ziel der Drohne ist tot.")
+	backpack.call("remove", drone_uid)
+	_game.call("sync_build")
 	await _set_upgrades({})
 	await _physics(3)
-	_check(not is_instance_valid(effects.get("drone")), "Ohne das Upgrade verschwindet die Drohne.")
+	_check(not is_instance_valid(effects.get("drone")), "Ohne die Kamera im Rucksack verschwindet die Drohne.")
 	await _clear_field()
 
 
@@ -657,11 +676,13 @@ func _test_synergy() -> void:
 	await _clear_field()
 
 
-# --- 6. Tür und Wandkäufe ---------------------------------------------------------------------
+# --- 6. Tür und Waffenfund ---------------------------------------------------------------------
 
 func _all_spawns_reach(target: Vector3, label: String) -> void:
 	var map: RID = _player().get_world_3d().navigation_map
 	for node: Node in get_nodes_in_group("zombie_spawns"):
+		if not bool(node.get_meta("active", true)):
+			continue
 		var marker: Node3D = node as Node3D
 		var path: PackedVector3Array = NavigationServer3D.map_get_path(map, marker.global_position, target, true)
 		var reaches: bool = path.size() >= 2 and _flat_distance(path[path.size() - 1], target) < 0.6
@@ -731,8 +752,13 @@ func _test_door_and_wall_buys() -> void:
 	Input.action_release("interact")
 	_check(opened, "Taste E öffnet die Tür.")
 	_check(_points() == 0, "Die Tür hat %d Punkte gekostet (Rest %d)." % [Balance.DOOR_COST, _points()])
+	# Nur die Eingänge der Bühne (Zone 1) und des gekauften Raums (Zone 2) sind aktiv.
 	for node: Node in get_nodes_in_group("zombie_spawns"):
-		_check(bool(node.get_meta("active", false)), "Nach dem Öffnen ist %s aktiv." % node.name)
+		var zone: int = int(node.get_meta("zone", 1))
+		if zone <= 2:
+			_check(bool(node.get_meta("active", false)), "Nach dem Öffnen ist %s aktiv." % node.name)
+		else:
+			_check(not bool(node.get_meta("active", true)), "%s (Zone %d) bleibt aus, solange der Raum zu ist." % [node.name, zone])
 	_check((_main.get("spawner") as Node).call("get_active_spawns").size() == 5, "Der Spawner kennt jetzt 5 aktive Spawnpunkte.")
 	await _physics(5)
 
@@ -755,27 +781,16 @@ func _test_door_and_wall_buys() -> void:
 		await _wall_lean_attack(type, door)
 	_reset_player()
 
-	# Wandkäufe: Für Punkte gibt es die Waffe als gewöhnlichen Gegenstand. Der Gesamttest räumt
-	# selbst ein (Game.auto_pack): Passt sie in die Hände, hält der Spieler sie danach.
+	# Wandkäufe gibt es nicht mehr (Abschnitt 22): Waffen kommen aus Kisten und vom Kandidaten.
 	var weapons: Node = _weapons()
 	var backpack: RefCounted = _game.get("backpack") as RefCounted
+	for node: Node in (_main.get_node("Level") as Node).get_children():
+		_check(not String(node.name).begins_with("WallBuy"), "Im Level gibt es keinen Wandkauf mehr (%s)." % node.name)
+	# Eine gefundene Waffe kommt als gewöhnlicher Gegenstand in den Rucksack (Game.auto_pack räumt ein).
 	for weapon_id: String in ["shotgun", "smg"]:
-		var wall_buy: Node3D = _main.get_node_or_null("Level/WallBuy_%s" % weapon_id) as Node3D
-		_check(wall_buy != null, "Es gibt den Wandkauf Level/WallBuy_%s." % weapon_id)
-		if wall_buy == null:
-			continue
-		var def: Dictionary = WeaponDefs.get_def(weapon_id)
-		var price: int = int(def["price"])
-		_game.call("spend_points", _points())
-		var owned_before: int = int(backpack.call("highest_level", weapon_id))
-		wall_buy.call("interact", player)
-		_check(int(backpack.call("highest_level", weapon_id)) == owned_before, "Ohne Punkte gibt es %s nicht." % weapon_id)
-		_game.call("add_points", price)
-		_check(String(wall_buy.call("get_prompt")) == "E: %s kaufen (%d Punkte)" % [String(def["name"]), price], "Hinweis zum Kauf von %s, war: %s" % [weapon_id, String(wall_buy.call("get_prompt"))])
-		wall_buy.call("interact", player)
-		_check(_points() == 0, "%s kostet %d Punkte." % [weapon_id, price])
-		_check(int(backpack.call("highest_level", weapon_id)) == 1, "Der Wandkauf gibt %s als gewöhnlichen Gegenstand." % weapon_id)
-		_check(_state() == STATE_PLAYING, "Mit auto_pack läuft das Spiel nach dem Kauf weiter.")
+		_game.call("grant_item", weapon_id, 1)
+		_check(int(backpack.call("highest_level", weapon_id)) == 1, "%s liegt als gewöhnlicher Gegenstand im Rucksack." % weapon_id)
+		_check(_state() == STATE_PLAYING, "Mit auto_pack läuft das Spiel nach dem Fund weiter.")
 		await _frames(2)
 	_check(int(backpack.call("hands_used")) <= 2, "Der Spieler hält höchstens zwei Hände voll.")
 	# Für die folgenden Prüfungen die Schrotflinte in die Hand nehmen.
@@ -783,7 +798,8 @@ func _test_door_and_wall_buys() -> void:
 	await _frames(2)
 	_check(String(weapons.call("get_current_weapon_id")) == "shotgun", "Die Schrotflinte ist in der Hand.")
 	var shotgun_state: RefCounted = weapons.call("get_state", "shotgun")
-	_check(shotgun_state != null and int(shotgun_state.get("mag")) == int(WeaponDefs.get_def("shotgun")["magazine"]), "Die Schrotflinte hat ein volles Magazin.")
+	_check(shotgun_state != null and int(shotgun_state.get("mag")) == int(shotgun_state.call("magazine_size")) and int(shotgun_state.get("mag")) >= int(WeaponDefs.get_def("shotgun")["magazine"]),
+			"Die Schrotflinte hat ein volles Magazin.")
 
 	# Die Schrotflinte trifft mit mehreren Kugeln.
 	_reset_player()
@@ -801,7 +817,12 @@ func _test_door_and_wall_buys() -> void:
 
 func _test_second_run_same_scene() -> void:
 	# Vorher: Upgrades, Waffen, offene Tür, ein Zombie und eine Kiste.
-	await _set_upgrades({"drone": 1, "max_hp": 2})
+	var old_backpack: RefCounted = _game.get("backpack")
+	var old_drone: int = int(old_backpack.call("add_item", "drone", 1))
+	_check(old_drone > 0 and bool(old_backpack.call("auto_place", old_drone)), "Die Kameradrohne passt in den Rucksack.")
+	_game.call("sync_build")
+	await _set_upgrades({"max_hp": 2})
+	_check(is_instance_valid((_main.get("upgrade_effects") as Node).get("drone")), "Vor dem neuen Lauf fliegt eine Drohne.")
 	_spawn("walker", Vector3(0.0, 0.0, -1.0))
 	(_main.get("chest_dropper") as Node).call("spawn_chest", Vector3(3.0, 0.0, 3.0), Balance.RARITY_GOLD)
 	await _physics(3)

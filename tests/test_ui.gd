@@ -33,6 +33,9 @@ class FakePlayer:
 	extends Node3D
 	var hp: float = 80.0
 	var max_hp: float = 120.0
+	## Zweite Staffel: bereite Ladungen und Ladungen im Rucksack (wie in player.gd).
+	var revive_charges: int = 1
+	var max_revive_charges: int = 2
 	var controller: FakeController = FakeController.new()
 
 	func _init() -> void:
@@ -405,12 +408,89 @@ func _test_hud() -> void:
 	_check(_label(hud, "kill_label").visible, "KOPFSCHUSS-Text erscheint.")
 	_equal(_label(hud, "kill_label").text, "KOPFSCHUSS!", "Text beim Kopfschuss-Kill.")
 
-	# Interaktions-Hinweis.
-	_events.emit_signal("interact_prompt_changed", "E – Publikumsjoker kaufen (500)")
+	# Interaktions-Hinweis: die Texte der Türen (door.gd) mit allen vier Räumen und ihren Preisen.
+	_events.emit_signal("interact_prompt_changed", "E – Backstage öffnen (750)")
 	_check(_control(hud, "prompt_panel").visible, "Interaktions-Hinweis erscheint.")
-	_equal(_label(hud, "prompt_label").text, "E – Publikumsjoker kaufen (500)", "Text des Hinweises.")
+	_equal(_label(hud, "prompt_label").text, "E – Backstage öffnen (750)", "Text des Hinweises.")
+	var prompt_font: Font = _hud_script.call("show_font", false) as Font
+	var room_names: Array[String] = ["Backstage", "Kantine", "Garderobe", "Regieraum"]
+	for i: int in room_names.size():
+		var cost: int = Balance.DOOR_COSTS[i]
+		for prompt: String in ["E – %s öffnen (%d)" % [room_names[i], cost], "%s (%d) – dir fehlen %d Punkte" % [room_names[i], cost, cost - 1]]:
+			_events.emit_signal("interact_prompt_changed", prompt)
+			var prompt_label: Label = _label(hud, "prompt_label")
+			_equal(prompt_label.text, prompt, "Der Hinweis zeigt den Text der Tür.")
+			var prompt_size: int = prompt_label.get_theme_font_size("font_size")
+			_check(prompt_size >= 20, "Der Tür-Hinweis „%s“ bleibt groß (%d Punkt)." % [prompt, prompt_size])
+			_check(prompt_font.get_string_size(prompt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, prompt_size).x <= 620.0, "Der Tür-Hinweis „%s“ passt in die Plakette." % prompt)
+	_equal(Balance.DOOR_COSTS.size(), room_names.size(), "Aufbau: Es gibt vier kaufbare Räume.")
 	_events.emit_signal("interact_prompt_changed", "")
 	_check(not _control(hud, "prompt_panel").visible, "Leerer Hinweis blendet aus.")
+
+	# Kameras (Abschnitt 22.1) stehen in der Buff-Anzeige: je Kameratyp eine Zeile mit Zahl und Name.
+	var buff_rows: Control = _control(hud, "buff_rows")
+	_equal(buff_rows.get_child_count(), 0, "Aufbau: Vor den Kameras ist die Buff-Anzeige leer.")
+	var camera_uids: Array[int] = []
+	for camera_id: String in ["drone", "drone", "cam_slow"]:
+		var camera_uid: int = int(backpack.call("add_item", camera_id, 2 if camera_uids.is_empty() else 1))
+		_check(bool(backpack.call("auto_place", camera_uid)), "Aufbau: Die Kamera %s passt in den Rucksack." % camera_id)
+		camera_uids.append(camera_uid)
+	_game.call("sync_build")
+	_equal((_game.get("cameras") as Array).size(), 3, "Aufbau: Drei Kameras sind im Spiel.")
+	_equal(buff_rows.get_child_count(), 2, "Zwei Kameratypen: zwei Zeilen in der Buff-Anzeige.")
+	_equal(_text(buff_rows, "Buff_camera_drone/Text"), "2 × %s" % ItemDefs.display_name("drone"), "Zwei Drohnen stehen als eine Zeile mit Zahl da.")
+	_equal(_text(buff_rows, "Buff_camera_cam_slow/Text"), ItemDefs.display_name("cam_slow"), "Eine einzelne Kamera steht mit ihrem Namen da.")
+	_check(buff_rows.get_node_or_null("Buff_camera_drone/Icon") != null, "Die Kamera-Zeile zeigt ein Bild.")
+	var camera_text: Label = buff_rows.get_node("Buff_camera_cam_slow/Text") as Label
+	_check(prompt_font.get_string_size(camera_text.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, camera_text.get_theme_font_size("font_size")).x <= camera_text.size.x + 0.5,
+		"Der Name der Kamera passt in die Zeile.")
+	var camera_rows: Array = _hud_script.call("camera_entries", [{"id": "cam_tele", "level": 2}, {"id": "drone", "level": 1}, {"id": "cam_tele", "level": 4}, "kaputt", {}])
+	_equal(camera_rows.size(), 2, "camera_entries fasst gleiche Kameras zusammen und überspringt Unbrauchbares.")
+	if camera_rows.size() == 2:
+		_equal(str(camera_rows[0]["key"]), "camera_cam_tele", "Die Zeilen stehen in der Reihenfolge des Erwerbs.")
+		_equal(str(camera_rows[0]["text"]), "2 × Tele-Kamera", "Die Zeile nennt Zahl und Namen.")
+		_equal(int(camera_rows[0]["level"]), 4, "Die Zeile merkt sich die beste Rarität.")
+		_equal(str(camera_rows[1]["text"]), "Kameradrohne", "Eine einzelne Kamera steht ohne Zahl da.")
+	# Alle fünf Kameratypen passen mit ihrem Namen in eine Zeile, auch mit Zahl davor.
+	for camera_id: String in ["drone", "cam_tele", "cam_flash", "cam_slow", "cam_director"]:
+		var many_text: String = "3 × %s" % ItemDefs.display_name(camera_id)
+		var many_size: int = int(_hud_script.call("fit_font_size", many_text, 15, 154.0, false, 11))
+		_check(prompt_font.get_string_size(many_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, many_size).x <= 158.0, "„%s“ passt in eine Zeile der Buff-Anzeige." % many_text)
+	backpack.call("remove", camera_uids[0])
+	_game.call("sync_build")
+	_equal(_text(buff_rows, "Buff_camera_drone/Text"), ItemDefs.display_name("drone"), "Nach dem Verkauf einer Drohne steht die andere allein da.")
+	for camera_uid: int in camera_uids:
+		backpack.call("remove", camera_uid)
+	_game.call("sync_build")
+	_equal(buff_rows.get_child_count(), 0, "Ohne Kameras ist die Buff-Anzeige wieder leer.")
+
+	# Ladungen der Zweiten Staffel: nur sichtbar mit Gegenstand, neben der Sprung-Anzeige.
+	var revive_box: Control = _control(hud, "revive_box")
+	var revive_pips: Control = _control(hud, "revive_pips")
+	var dash_box: Control = _control(hud, "dash_box")
+	_check(not revive_box.visible, "Ohne Zweite Staffel ist die Anzeige der Ladungen aus.")
+	_events.emit_signal("revive_charges_changed", 1, 2)
+	_check(revive_box.visible, "Mit Zweiter Staffel erscheint die Anzeige der Ladungen.")
+	_equal(int(revive_pips.get("max_level")), 2, "Je Ladung gibt es ein Kästchen.")
+	_equal(int(revive_pips.get("level")), 1, "Bereite Ladungen sind gefüllt.")
+	_equal(_text(revive_box, "ReviveTag"), "2. STAFFEL", "Die Anzeige ist beschriftet.")
+	_check(not dash_box.visible and is_equal_approx(revive_box.offset_top, dash_box.offset_top), "Ohne Notausgang steht die Anzeige am Platz der Sprung-Anzeige.")
+	_events.emit_signal("dash_charges_changed", 1, 2)
+	_check(dash_box.visible and revive_box.offset_bottom <= dash_box.offset_top + 0.5, "Mit Notausgang steht sie direkt über der Sprung-Anzeige.")
+	_check(is_equal_approx(revive_box.offset_left, dash_box.offset_left), "Beide Anzeigen stehen untereinander neben dem Lebensbalken.")
+	_events.emit_signal("revive_charges_changed", 0, 2)
+	_equal(int(revive_pips.get("level")), 0, "Eine verbrauchte Ladung ist leer.")
+	_check(revive_box.visible, "Auch ohne bereite Ladung bleibt die Anzeige stehen.")
+	_events.emit_signal("revive_charges_changed", 3, 3)
+	_equal(int(revive_pips.get("max_level")), 3, "Ein weiteres Exemplar ist eine weitere Ladung.")
+	_check(revive_pips.offset_right - revive_pips.offset_left > 26.0 * 3.0 - 0.5, "Die Kästchen bekommen Platz für drei Ladungen.")
+	_events.emit_signal("revive_charges_changed", 0, 0)
+	_check(not revive_box.visible, "Ohne Zweite Staffel verschwindet die Anzeige wieder.")
+	_events.emit_signal("dash_charges_changed", 0, 0)
+	_events.emit_signal("revive_charges_changed", 2, 2)
+	_game.call("start_run", 5)
+	_check(not revive_box.visible, "Ein neuer Lauf ohne Spieler stellt die Anzeige zurück.")
+	backpack = _game.get("backpack") as RefCounted
 
 	# Buff-Anzeige: Sie zeigt Boni und Verbindungen, nicht die Gegenstände selbst.
 	var upgrades: RefCounted = _upgrades()
@@ -507,6 +587,9 @@ func _test_hud_with_player() -> void:
 	_equal(_label(hud, "ammo_label").text, "12", "HUD holt das Magazin vom Spieler.")
 	_equal(_label(hud, "magazine_label").text, "/ 30", "HUD holt die Größe des Magazins vom Spieler.")
 	_check(not _hand_box(hud, 1).visible, "Eine Waffe beim Spieler: eine Hand.")
+	_check(_control(hud, "revive_box").visible, "HUD holt die Ladungen der Zweiten Staffel vom Spieler.")
+	_equal(int(_control(hud, "revive_pips").get("max_level")), 2, "Ladungen im Rucksack des Spielers.")
+	_equal(int(_control(hud, "revive_pips").get("level")), 1, "Bereite Ladungen des Spielers.")
 	# Der Spieler hält jetzt zwei Waffen, die rechte lädt gerade nach (halb fertig).
 	player.controller.hands = [
 		{"hand": 0, "uid": 3, "id": "smg", "level": 1, "hands": 1, "mag": 12, "magazine": 30, "reloading": false},
@@ -529,6 +612,7 @@ func _test_hud_with_player() -> void:
 	_game.call("start_run", 5)
 	await _frames(2)
 	_equal(_label(hud, "health_label").text, "100", "Ohne Spieler gelten wieder die Startwerte.")
+	_check(not _control(hud, "revive_box").visible, "Ohne Spieler gibt es keine Ladungen der Zweiten Staffel.")
 	await _remove(hud)
 
 
@@ -564,8 +648,12 @@ func _test_chest_choice() -> void:
 		if UpgradeDefs.has(String(offer["id"])):
 			_equal(_text(card, "Level"), "NEU · Ungewöhnlich", "Karte %d: neuer Upgrade-Gegenstand aus der Silber-Kiste." % (i + 1))
 			_equal(_text(card, "Tag"), "UNGEWÖHNLICH", "Karte %d zeigt die Rarität des Gegenstands." % (i + 1))
-			_equal(_plain(_text(card, "Text")), UpgradeDefs.effect_text(String(offer["id"]), 2), "Karte %d zeigt die Wirkung der Stufe." % (i + 1))
-			_check(card.get_node_or_null("Pips") != null and card.get_node_or_null("Shape") != null, "Karte %d zeigt Stufen-Punkte und die Form." % (i + 1))
+			# Der Text des Gegenstands: bei Stern-Gegenständen mit dem Hinweis auf die Sterne.
+			_equal(_plain(_text(card, "Text")), ItemDefs.description(String(offer["id"]), 2), "Karte %d zeigt die Wirkung der Stufe." % (i + 1))
+			# Gegenstände mit gezeichnetem Bild zeigen die Form klein daneben ("Shape"), neuere
+			# Gegenstände ohne Bild zeigen die Form groß als Bild ("Icon").
+			_check(card.get_node_or_null("Pips") != null, "Karte %d zeigt Raritäts-Punkte." % (i + 1))
+			_check(card.get_node_or_null("Shape") != null or card.get_node_or_null("Icon") != null, "Karte %d zeigt die Form." % (i + 1))
 		else:
 			var is_bag: bool = String(offer["id"]).begins_with("bag_")
 			if is_bag:
@@ -575,6 +663,9 @@ func _test_chest_choice() -> void:
 			else:
 				# Waffen sind seit Abschnitt 18 auch Gegenstände: Die Karte nennt dann "Waffe".
 				var kind_text: String = "Waffe" if ItemDefs.is_weapon(String(offer["id"])) else "Verstärker"
+				# Kameras sind seit Abschnitt 22 eine eigene Art.
+				if ItemDefs.is_camera(String(offer["id"])):
+					kind_text = "Kamera"
 				_equal(_text(card, "Level"), "%s · NEU · Ungewöhnlich" % kind_text, "Karte %d: %s mit Rarität." % [i + 1, kind_text])
 				_equal(_text(card, "Tag"), "UNGEWÖHNLICH", "Karte %d zeigt die Rarität." % (i + 1))
 				_check(card.get_node_or_null("Pips") != null, "Karte %d (%s) zeigt Raritäts-Punkte." % [i + 1, kind_text])
@@ -684,6 +775,7 @@ func _test_chest_choice() -> void:
 						"Kartenteil %s bleibt innerhalb der Karte." % part.name)
 	choice.call("close")
 	_check(not bool(choice.call("is_open")), "close schließt ohne Wahl.")
+	await _test_all_item_cards(choice)
 	choice.call("show_offers", Balance.RARITY_BRONZE, [])
 	_check(not bool(choice.call("is_open")), "Ohne Angebote bleibt die Wahl zu.")
 
@@ -695,6 +787,76 @@ func _test_chest_choice() -> void:
 	_check(not bool(choice.call("is_open")), "Ein neuer Lauf schließt die Wahl.")
 	await _remove(choice)
 	_game.set("auto_pack", false)
+
+
+## Die Karte jedes Gegenstands aus ItemDefs.ORDER (64, darunter die Kameras und alles Neue aus
+## Abschnitt 22): Name, Zeile mit Art und Rarität und Wirkungstext passen in ihre Felder, lange
+## Namen brechen nur an Leerzeichen und Bindestrichen um, nichts ragt aus der Karte.
+func _test_all_item_cards(choice: Node) -> void:
+	var slanted: Font = _hud_script.call("show_font", true) as Font
+	var ids: Array[String] = ItemDefs.all_ids()
+	_equal(ids.size(), 65, "Aufbau: Es gibt 65 Gegenstände.")
+	var seen: int = 0
+	for start: int in range(0, ids.size(), 3):
+		var shown: Array = []
+		for i: int in range(start, mini(start + 3, ids.size())):
+			# Abwechselnd alle Raritäten, damit auch die längsten Zeilen ("… · NEU · Ungewöhnlich") vorkommen.
+			shown.append({"kind": "item", "id": ids[i], "level": 1 + (i % 5), "owned_level": 0 if i % 2 == 0 else 1 + (i % 5)})
+		choice.call("show_offers", Balance.RARITY_GOLD, shown)
+		await _frames(1)
+		var cards: Array = choice.get("cards")
+		_equal(cards.size(), shown.size(), "Je Angebot eine Karte (ab %s)." % ids[start])
+		for n: int in mini(cards.size(), shown.size()):
+			var card: Control = cards[n] as Control
+			var offer: Dictionary = shown[n]
+			var id: String = str(offer["id"])
+			seen += 1
+			_equal(_text(card, "Name"), ItemDefs.display_name(id), "Die Karte von %s zeigt den Namen." % id)
+			_equal(_plain(_text(card, "Text")), ItemDefs.description(id, int(offer["level"])), "Die Karte von %s zeigt die Wirkung." % id)
+			_check(card.get_node_or_null("Icon") != null, "Die Karte von %s hat ein Bild oder ihre Form." % id)
+			# Name: höchstens zwei Zeilen, kein Wort wird mittendrin getrennt.
+			var name_label: Label = card.get_node("Name") as Label
+			var name_size: int = name_label.get_theme_font_size("font_size")
+			_check(name_label.get_line_count() <= 2, "Der Name von %s braucht höchstens zwei Zeilen." % id)
+			for word: String in name_label.text.split(" ", false):
+				_check(slanted.get_string_size(word, HORIZONTAL_ALIGNMENT_LEFT, -1.0, name_size).x <= name_label.size.x + 0.5,
+					"Das Wort „%s“ im Namen von %s passt in die Karte." % [word, id])
+			# Zeile mit Art und Rarität: passt in einer Zeile in die Karte.
+			var level_label: Label = card.get_node("Level") as Label
+			_check(slanted.get_string_size(level_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, level_label.get_theme_font_size("font_size")).x <= level_label.size.x + 0.5,
+				"Die Zeile „%s“ von %s passt in die Karte." % [level_label.text, id])
+			# Wirkungstext: Alle Zeilen passen in das Feld, die Schrift bleibt lesbar.
+			var text_label: Label = card.get_node("Text") as Label
+			var spacing: float = float(text_label.get_theme_constant("line_spacing"))
+			var needed: float = float(text_label.get_line_count()) * (float(text_label.get_line_height()) + spacing) - spacing
+			_check(needed <= text_label.size.y + 0.5, "Der Wirkungstext von %s passt in die Karte (%d von %d)." % [id, roundi(needed), roundi(text_label.size.y)])
+			_check(text_label.get_theme_font_size("font_size") >= 11, "Der Wirkungstext von %s ist mindestens 11 Punkt groß." % id)
+			for child: Node in card.get_children():
+				var part: Control = child as Control
+				if part == null or part.name == "NewSticker":
+					continue
+				_check(part.position.x >= -0.5 and part.position.y >= -0.5
+						and part.position.x + part.size.x <= card.size.x + 0.5
+						and part.position.y + part.size.y <= card.size.y + 0.5,
+						"Kartenteil %s von %s bleibt innerhalb der Karte." % [part.name, id])
+			# Der Aufkleber NEU überdeckt das Bild nicht (lange Formen rücken nach links).
+			var sticker: Control = card.get_node_or_null("NewSticker") as Control
+			var icon: Control = card.get_node("Icon") as Control
+			if sticker != null and int(offer["owned_level"]) <= 0:
+				var drawn_width: float = icon.size.x
+				if icon.get("item_id") != null:
+					drawn_width = minf(float(icon.get("max_cell")), minf(icon.size.x / float(ItemDefs.size(id).x), icon.size.y / float(ItemDefs.size(id).y))) * float(ItemDefs.size(id).x)
+				var drawn_right: float = icon.position.x + (icon.size.x + drawn_width) * 0.5
+				_check(drawn_right <= sticker.position.x + 4.0, "Das Bild von %s endet vor dem Aufkleber NEU (%d vor %d)." % [id, roundi(drawn_right), roundi(sticker.position.x)])
+			if ItemDefs.is_camera(id):
+				_check(_text(card, "Level").begins_with("Kamera · "), "Die Karte der Kamera %s nennt die Art, war: %s" % [id, _text(card, "Level")])
+				_check(bool(_hud_script.call("has_icon", id)) and str(icon.get("icon_id")) == id, "Die Kamera %s hat ihr gezeichnetes Bild." % id)
+				_check(card.get_node_or_null("Shape") != null, "Die Karte der Kamera %s zeigt daneben die Form." % id)
+			elif ItemDefs.is_weapon(id):
+				_check(_text(card, "Level").begins_with("Waffe · "), "Die Karte der Waffe %s nennt die Art." % id)
+				_check(_text(card, "Text").contains("Hand") or _text(card, "Text").contains("Hände"), "Die Karte der Waffe %s nennt die Hände." % id)
+	_equal(seen, ids.size(), "Jeder Gegenstand hatte seine Karte.")
+	choice.call("close")
 
 
 # --- Pausemenü ------------------------------------------------------------------------
@@ -788,6 +950,27 @@ func _test_game_over() -> void:
 	_equal((screen.get("restart_button") as Button).text, "NEUSTART", "Knopf Neustart.")
 	_equal((screen.get("quit_button") as Button).text, "BEENDEN", "Knopf Beenden.")
 	_check((screen.get("quit_button") as Button).pressed.get_connections().size() > 0, "Beenden ist verdrahtet.")
+	# Konto (Abschnitt 22.5): Gutschrift des Laufs und neuer Kontostand.
+	var run_stats: Dictionary = screen.get("stats")
+	_equal(int(run_stats.get("bank_gained", -1)), 12340, "Aufbau: Der Lauf bringt 12.340 aufs Konto.")
+	_equal(_label(screen, "bank_gain_label").text, "+12.340", "Game Over zeigt die Gutschrift des Laufs.")
+	_equal(_label(screen, "bank_label").text, str(_hud_script.call("format_int", int(run_stats.get("bank", -1)))), "Game Over zeigt den neuen Kontostand.")
+	_equal(int(run_stats.get("bank", -1)), int((_game.get("progress") as RefCounted).get("bank")), "Der Kontostand ist der aus Game.progress.")
+	var program_button: Button = screen.get("program_button") as Button
+	_equal(program_button.text, "PROGRAMM", "Knopf Programm.")
+	_check(program_button.disabled, "Der Knopf Programm ist direkt nach dem Öffnen gesperrt wie die anderen.")
+	# Die drei Knöpfe stehen nebeneinander und überlappen nicht.
+	var restart_rect: Rect2 = Rect2((screen.get("restart_button") as Button).position, (screen.get("restart_button") as Button).size)
+	var program_rect: Rect2 = Rect2(program_button.position, program_button.size)
+	var quit_rect: Rect2 = Rect2((screen.get("quit_button") as Button).position, (screen.get("quit_button") as Button).size)
+	_check(restart_rect.end.x <= program_rect.position.x and program_rect.end.x <= quit_rect.position.x, "Neustart, Programm und Beenden stehen nebeneinander.")
+	var stage: Control = screen.get_node("Root/Stage") as Control
+	_check(restart_rect.position.x >= 0.0 and quit_rect.end.x <= stage.size.x + 0.5, "Die drei Knöpfe passen auf die Bühne.")
+	var requests: Array[int] = [0]
+	screen.connect("program_requested", func() -> void: requests[0] += 1)
+	program_button.pressed.emit()
+	screen.call("_unhandled_input", _key(KEY_P))
+	_equal(requests[0], 0, "Während der Sperre öffnet nichts das Programm.")
 
 	# Sperre direkt nach dem Öffnen: R und Knopf starten nicht neu.
 	_check(bool(screen.call("is_input_locked")), "Direkt nach dem Öffnen ist die Eingabe gesperrt.")
@@ -799,6 +982,18 @@ func _test_game_over() -> void:
 	var unlocked: bool = await _wait_until(func() -> bool: return not bool(screen.call("is_input_locked")), 3.0)
 	_check(unlocked, "Die Sperre endet von selbst.")
 	_check(not (screen.get("restart_button") as Button).disabled, "Nach der Sperre ist der Knopf frei.")
+	# Programm: Knopf und Taste P melden program_requested (ohne zugewiesenen Bildschirm nur das).
+	_check(not program_button.disabled, "Nach der Sperre ist auch der Knopf Programm frei.")
+	program_button.pressed.emit()
+	_equal(requests[0], 1, "Der Knopf Programm meldet program_requested.")
+	screen.call("_unhandled_input", _key(KEY_P))
+	_equal(requests[0], 2, "Die Taste P meldet program_requested.")
+	_check(bool(screen.call("is_open")) and not bool(screen.call("is_program_open")), "Ohne zugewiesenen Bildschirm bleibt das Game Over allein offen.")
+	_equal(_state(), STATE_GAME_OVER, "Das Programm zu öffnen ändert den Spielzustand nicht.")
+	# Der Kontostand folgt bank_changed (ein Kauf im Programm zieht ab), die Gutschrift bleibt.
+	_events.emit_signal("bank_changed", 777, -2000)
+	_equal(_label(screen, "bank_label").text, "777", "Der Kontostand folgt bank_changed.")
+	_equal(_label(screen, "bank_gain_label").text, "+12.340", "Die Gutschrift des Laufs bleibt stehen.")
 
 	# Taste R startet neu.
 	screen.call("_unhandled_input", _key(KEY_R))
@@ -819,9 +1014,83 @@ func _test_game_over() -> void:
 	_equal(_run_starts, starts_before + 1, "Der Knopf Neustart startet neu.")
 	_check(not bool(screen.call("is_open")), "Nach dem Neustart ist das Game Over zu.")
 
+	# Kameras stehen in der Liste des Builds (stats["cameras"], ein Eintrag je Exemplar): je
+	# Kameratyp eine Zeile, gleiche zusammengefasst, mit der besten Rarität.
+	screen.call("show_stats", {
+		"wave": 9, "kills": 120, "points": 9000, "bank_gained": 9000, "bank": 1234567,
+		"upgrades": [{"id": "burn", "name": "Feuershow", "level": 3}, {"id": "revive", "name": "Zweite Staffel", "level": 2}],
+		"synergies": ["storm_front"],
+		"cameras": [{"id": "drone", "name": "Kameradrohne", "level": 2}, {"id": "cam_flash", "name": "Blitzlicht-Kamera", "level": 4},
+			{"id": "drone", "name": "Kameradrohne", "level": 3}],
+	})
+	_equal(list.get_child_count(), 5, "Zwei Upgrades, zwei Kameratypen und die Synergie.")
+	_equal(_text(list, "Row_drone/Name"), "2 × Kameradrohne", "Zwei Drohnen stehen als eine Zeile mit Zahl da.")
+	_equal(_text(list, "Row_drone/Rarity"), "SELTEN", "Die Zeile nennt die beste Rarität der Drohnen.")
+	_equal(_text(list, "Row_cam_flash/Name"), "Blitzlicht-Kamera", "Die Blitzlicht-Kamera steht in der Liste.")
+	_equal(_text(list, "Row_cam_flash/Rarity"), "EPISCH", "Die Kamera nennt ihre Rarität.")
+	_equal(_text(list, "Row_revive/Name"), "Zweite Staffel", "Neue Gegenstände stehen mit ihrem Namen in der Liste.")
+	_check(list.get_node_or_null("Row_cam_flash/Icon") != null, "Die Zeile der Kamera hat ein Bild.")
+	_check(list.get_child(2).name == "Row_drone" and list.get_child(4).name == "Synergy_storm_front", "Reihenfolge: Upgrades, Kameras, Synergien.")
+	_equal(_label(screen, "bank_gain_label").text, "+9.000", "Die Gutschrift steht mit Tausenderpunkt da.")
+	_equal(_label(screen, "bank_label").text, "1.234.567", "Auch ein Millionen-Konto steht ganz da.")
+	var bank_label: Label = _label(screen, "bank_label")
+	var slanted: Font = _hud_script.call("show_font", true) as Font
+	_check(slanted.get_string_size(bank_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, bank_label.get_theme_font_size("font_size")).x <= bank_label.size.x + 0.5,
+		"Das Millionen-Konto passt in sein Feld.")
+	_check(not _label(screen, "empty_label").visible, "Mit Kameras kein Leer-Hinweis.")
+	# Nur Kameras: Auch das ist ein Build.
+	screen.call("show_stats", {"wave": 2, "cameras": [{"id": "cam_slow", "name": "Zeitlupen-Kamera", "level": 1}]})
+	_equal(list.get_child_count(), 1, "Eine Kamera allein steht in der Liste.")
+	_check(not _label(screen, "empty_label").visible, "Mit einer Kamera kein Leer-Hinweis.")
+	_equal(_label(screen, "bank_gain_label").text, "+0", "Ohne Angabe steht +0 als Gutschrift.")
+	# Viele Einträge (der Rucksack fasst mehr als zwölf verschiedene Gegenstände): Die Liste
+	# bleibt in ihrem Rahmen, was nicht passt, zählt der letzte Platz.
+	for count: int in [8, 9, 12, 13, 20, 24]:
+		var many: Array = []
+		for i: int in count:
+			var many_id: String = UpgradeDefs.UPGRADES.keys()[i]
+			many.append({"id": many_id, "name": UpgradeDefs.display_name(many_id), "level": 1 + (i % 5)})
+		screen.call("show_stats", {"wave": 5, "upgrades": many, "synergies": [], "cameras": []})
+		var shown_rows: int = 0
+		var rows_fit: bool = true
+		var overlap: bool = false
+		var rects: Array[Rect2] = []
+		for child: Node in list.get_children():
+			if child.is_queued_for_deletion():
+				continue
+			var row: Control = child as Control
+			var rect: Rect2 = Rect2(row.position, row.size)
+			if rect.position.x < -0.5 or rect.position.y < -0.5 or rect.end.x > list.size.x + 0.5 or rect.end.y > list.size.y + 0.5:
+				rows_fit = false
+			for other: Rect2 in rects:
+				if rect.intersects(other):
+					overlap = true
+			rects.append(rect)
+			if str(row.name).begins_with("Row_"):
+				shown_rows += 1
+		_check(rows_fit, "Mit %d Einträgen bleibt die Liste in ihrem Rahmen." % count)
+		_check(not overlap, "Mit %d Einträgen überlappt keine Zeile." % count)
+		if count <= 20:
+			_equal(shown_rows, count, "Mit %d Einträgen stehen alle in der Liste." % count)
+			_check(list.get_node_or_null("More") == null, "Mit %d Einträgen fehlt nichts." % count)
+		else:
+			_equal(shown_rows, 19, "Mit %d Einträgen stehen 19 in der Liste." % count)
+			_equal(_text(list, "More"), "+%d weitere" % (count - 19), "Der letzte Platz nennt, wie viele fehlen.")
+	# Ein echter Lauf mit einer Kamera im Rucksack: Game.get_stats() liefert sie mit.
+	_game.call("start_run", 11)
+	var pack: RefCounted = _game.get("backpack") as RefCounted
+	var drone_uid: int = int(pack.call("add_item", "drone", 2))
+	_check(bool(pack.call("auto_place", drone_uid)), "Aufbau: Die Kameradrohne passt in den Rucksack.")
+	_game.call("sync_build")
+	_game.call("end_run")
+	_equal(_text(list, "Row_drone/Name"), ItemDefs.display_name("drone"), "Die Kamera aus dem Rucksack steht im Game Over.")
+	_equal(_text(list, "Row_drone/Rarity"), "UNGEWÖHNLICH", "Mit ihrer Rarität.")
+	_equal(_label(screen, "bank_gain_label").text, "+0", "Ein Lauf ohne Punkte bringt nichts aufs Konto.")
+
 	# show_stats verträgt eine lückenhafte Statistik.
 	screen.call("show_stats", {})
 	_equal(_label(screen, "points_value_label").text, "0", "Leere Statistik zeigt 0 Punkte.")
+	_equal(_label(screen, "bank_gain_label").text, "+0", "Leere Statistik zeigt +0 als Gutschrift.")
 	screen.call("close")
 	_check(not bool(screen.call("is_open")), "close blendet aus.")
 	await _remove(screen)

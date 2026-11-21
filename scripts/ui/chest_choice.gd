@@ -47,6 +47,13 @@ const CARD_SIZE: Vector2 = Vector2(340.0, 420.0)
 const CARD_GAP: float = 28.0
 const CARD_TOP: float = 156.0
 const MAX_CARDS: int = 3
+## Breite rechts oben in der Karte, die der Aufkleber NEU braucht.
+const NEW_STICKER_SPACE: float = 128.0
+## Zeilenabstand eines Labels (Standard des Themas): zählt beim Ausmessen des Wirkungstexts mit.
+const LABEL_LINE_SPACING: float = 3.0
+## Schrift der Zeile mit Art und Rarität: Größe und kleinste Größe, wenn die Zeile lang ist.
+const LEVEL_FONT_SIZE: int = 24
+const LEVEL_MIN_FONT_SIZE: int = 15
 const SUBLINES: Array[String] = [
 	"Kandidat, Sie haben die Wahl: Ein Preis darf mit!",
 	"Hinter welcher Karte steckt Ihr Glück?",
@@ -338,18 +345,24 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	UiStyle.anchor_box(tag, Vector2.ZERO, Vector2(64.0, 5.0), Vector2(CARD_SIZE.x - 84.0, 52.0))
 	card.add_child(tag)
 
-	if is_plain_item:
-		# Verstärker und Rucksack-Teile: Die Form ist das Bild der Karte.
+	if is_item and not UiStyle.has_icon(item_id):
+		# Waffen, Verstärker, Rucksack-Teile und neuere Gegenstände: Die Form ist das Bild der Karte.
+		# Kameras haben ein gezeichnetes Bild wie die ersten Upgrades.
 		var big_shape: UiStyle.ItemShape = UiStyle.ItemShape.new()
 		big_shape.name = "Icon"
 		big_shape.item_id = item_id
 		big_shape.max_cell = 34.0
-		UiStyle.anchor_box(big_shape, Vector2.ZERO, Vector2((CARD_SIZE.x - 110.0) * 0.5, 66.0), Vector2(110.0, 80.0))
+		var shape_rect: Rect2 = Rect2((CARD_SIZE.x - 110.0) * 0.5, 66.0, 110.0, 80.0)
+		if ItemDefs.has_rarity(item_id) and owned_level <= 0 and ItemDefs.size(item_id).x >= 3:
+			# Lange Formen (vor allem Waffen) rücken nach links: Rechts sitzt der Aufkleber NEU.
+			shape_rect = Rect2(22.0, 66.0, CARD_SIZE.x - 22.0 - NEW_STICKER_SPACE, 80.0)
+			big_shape.max_cell = 30.0
+		UiStyle.anchor_box(big_shape, Vector2.ZERO, shape_rect.position, shape_rect.size)
 		card.add_child(big_shape)
 	else:
 		var icon: UiStyle.UpgradeIcon = UiStyle.UpgradeIcon.new()
 		icon.name = "Icon"
-		icon.icon_id = String(offer.get("id", "")) if is_upgrade else kind
+		icon.icon_id = String(offer.get("id", "")) if (is_upgrade or is_item) else kind
 		UiStyle.anchor_box(icon, Vector2.ZERO, Vector2((CARD_SIZE.x - 76.0) * 0.5, 68.0), Vector2(76.0, 76.0))
 		card.add_child(icon)
 		if is_item:
@@ -385,8 +398,18 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 			level_color = ItemDefs.rarity_color(to_level)
 			if owned_level <= 0:
 				level_text = "NEU · %s" % ItemDefs.rarity_name(to_level)
+			var kind_text: String = ""
 			if is_plain_item:
-				level_text = ("Waffe · " if ItemDefs.is_weapon(item_id) else "Verstärker · ") + level_text
+				kind_text = "Verstärker · "
+				if ItemDefs.is_weapon(item_id):
+					kind_text = "Waffe · "
+				elif ItemDefs.is_camera(item_id):
+					kind_text = "Kamera · "
+			level_text = kind_text + level_text
+			if owned_level > 0 and not _fits_level_line(level_text, name_width - 8.0):
+				# "Kamera · Ungewöhnlich · du hast Ungewöhnlich" passt in keiner lesbaren Größe in
+				# die Karte: Die neue Rarität steht schon oben im Kopf und in den Kästchen.
+				level_text = "%sdu hast %s" % [kind_text, ItemDefs.rarity_name(owned_level)]
 	elif is_upgrade:
 		if from_level <= 0:
 			level_text = "NEU · Stufe %d" % to_level
@@ -399,7 +422,8 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	elif kind == ChestRoller.KIND_HEAL:
 		level_text = "+%d LEBEN" % int(offer.get("amount", 0))
 		level_color = UiStyle.COL_GREEN
-	var level_label: Label = UiStyle.make_label(level_text, 24, level_color, true)
+	# "Kamera · NEU · Ungewöhnlich" ist in voller Größe breiter als die Karte: Die Schrift passt sich an.
+	var level_label: Label = UiStyle.make_label(level_text, UiStyle.fit_font_size(level_text, LEVEL_FONT_SIZE, name_width - 8.0, true, LEVEL_MIN_FONT_SIZE), level_color, true)
 	level_label.name = "Level"
 	level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -441,10 +465,12 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 ## Ersetzt das Leerzeichen zwischen Zahl und Einheit ("15 m", "3 s", "15 %") durch ein
 ## geschütztes, damit der Zeilenumbruch die beiden nie trennt.
 func _keep_units_together(text: String) -> String:
-	var pattern: RegEx = RegEx.new()
-	if pattern.compile("([0-9]) (m|s|%)(?![a-zäöüß])") != OK:
-		return text
-	return pattern.sub(text, "$1" + String.chr(0x00A0) + "$2", true)
+	return UiStyle.keep_units_together(text)
+
+
+## Passt die Zeile mit Art und Rarität in ihrer kleinsten Schrift in diese Breite?
+func _fits_level_line(text: String, width: float) -> bool:
+	return UiStyle.show_font(true).get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, LEVEL_MIN_FONT_SIZE).x <= width
 
 
 ## Schräger Aufkleber "NEU!" neben dem Symbol einer Karte mit einem neuen Upgrade.
@@ -470,9 +496,11 @@ func _name_font_size(title: String, width: float) -> int:
 func _text_font_size(text: String, box: Vector2) -> int:
 	var font: Font = UiStyle.show_font(false)
 	var font_size: int = 17
-	while font_size > 12:
+	while font_size > 11:
 		var needed: Vector2 = font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, box.x, font_size)
-		if needed.y <= box.y:
+		# Das Label setzt zwischen die Zeilen noch seinen Zeilenabstand.
+		var lines: float = maxf(roundf(needed.y / maxf(font.get_height(font_size), 1.0)), 1.0)
+		if needed.y + (lines - 1.0) * LABEL_LINE_SPACING <= box.y - 4.0:
 			break
 		font_size -= 1
 	return font_size

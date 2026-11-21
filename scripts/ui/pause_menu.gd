@@ -21,7 +21,7 @@ const STAGE_SIZE: Vector2 = Vector2(760.0, 690.0)
 const BUTTON_SIZE: Vector2 = Vector2(340.0, 66.0)
 const BUTTON_STEP: float = 80.0
 const BUTTON_START_Y: float = 204.0
-const CONTROLS_TEXT: String = "WASD Laufen · Leertaste Springen · Umschalt Sprinten · Maus Zielen und Schießen\nR Nachladen · E Benutzen · Tab Rucksack · 1 2 3 oder Mausrad Waffe wechseln · Esc Pause"
+const CONTROLS_TEXT: String = "WASD Laufen · Leertaste Springen · Umschalt Sprinten · Maus Zielen und Schießen\nR Nachladen · E Tür öffnen · Tab Rucksack · Q Ausweichen (mit Notausgang) · Esc Pause"
 
 ## Überschrift des Menüs.
 var headline_label: Label

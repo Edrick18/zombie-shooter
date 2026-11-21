@@ -13,10 +13,18 @@ extends CanvasLayer
 ## Die Wahl setzt Game.character_id, schließt den Bildschirm und meldet character_chosen(id).
 ## Den Lauf startet der Bildschirm nicht selbst: main.gd hört auf das Signal.
 ## process_mode ALWAYS: Der Bildschirm lässt sich auch bei pausiertem Baum bedienen.
+##
+## Oben rechts stehen der Kontostand (Game.progress.bank, folgt Events.bank_changed) und der
+## Knopf „Programm“ (auch Taste P): open_program() meldet program_requested und öffnet den
+## Bildschirm „Programm“ (unlock_screen, von main.gd gesetzt) über der Wahl. Solange er offen
+## ist, nimmt die Kandidatenwahl keine Eingabe an. Danach ist sie wieder da, wie sie war.
 
 signal character_chosen(id: String)
+## Der Spieler will ins Programm (Knopf oder Taste P).
+signal program_requested
 
 const UiStyle := preload("res://scripts/ui/hud.gd")
+const UnlockScreen := preload("res://scripts/ui/unlock_screen.gd")
 const Balance := preload("res://scripts/core/balance.gd")
 const CharacterDefs := preload("res://scripts/core/character_defs.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
@@ -45,8 +53,11 @@ const FACT_VALUE_X: float = 148.0
 const BAG_CELL: float = 19.0
 const HEADLINE_TEXT: String = "WER TRITT HEUTE AN?"
 const SUBLINE_TEXT: String = "Drei Kandidaten, ein Studio voller Zombies. Sie haben die Wahl!"
-const HINT_TEXT: String = "Taste 1, 2 oder 3 oder ein Klick wählt sofort  ·  Pfeiltasten wechseln  ·  Enter bestätigt"
+const HINT_TEXT: String = "Taste 1, 2 oder 3 oder ein Klick wählt sofort  ·  Pfeiltasten wechseln  ·  Enter bestätigt  ·  P: Programm"
 const PICK_TEXT: String = "ENTER: ANTRETEN!"
+## Kontostand und Knopf "Programm" oben rechts auf der Bühne.
+const BANK_RECT: Rect2 = Rect2(950.0, 0.0, 230.0, 40.0)
+const PROGRAM_BUTTON_RECT: Rect2 = Rect2(964.0, 44.0, 212.0, 50.0)
 
 ## Karten in der Reihenfolge von CharacterDefs.ORDER. Meta "id" = Kandidat. Kinder je Karte:
 ## "Key" (Taste), "Tag", "Name", "Tagline", "Facts" (Zeilen mit Leben, Tempo, Waffen ...),
@@ -56,6 +67,13 @@ var cards: Array[Control] = []
 var headline_label: Label
 ## Bedienhinweis unter den Karten.
 var hint_label: Label
+## Kontostand oben rechts: "KONTO  12.340".
+var bank_label: Label
+## Knopf "PROGRAMM" (open_program).
+var program_button: Button
+## Bildschirm „Programm“, den der Knopf öffnet. Setzt main.gd, ohne ihn meldet der Knopf nur
+## program_requested.
+var unlock_screen: UnlockScreen = null
 
 var _built: bool = false
 var _selected: String = CharacterDefs.DEFAULT
@@ -73,6 +91,7 @@ func _init() -> void:
 
 func _ready() -> void:
 	_ensure_built()
+	Events.bank_changed.connect(_on_bank_changed)
 
 
 func _process(delta: float) -> void:
@@ -84,7 +103,7 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not is_open():
+	if not is_open() or is_program_open():
 		return
 	var key: InputEventKey = event as InputEventKey
 	if key == null or not key.pressed or key.echo:
@@ -98,13 +117,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif code == KEY_RIGHT:
 		step = 1
 	var confirm: bool = code == KEY_ENTER or code == KEY_KP_ENTER or code == KEY_SPACE
-	if number < 0 and step == 0 and not confirm:
+	var program: bool = code == KEY_P
+	if number < 0 and step == 0 and not confirm and not program:
 		return
 	if is_inside_tree():
 		get_viewport().set_input_as_handled()
 	if is_input_locked():
 		return
-	if number >= 0:
+	if program:
+		open_program()
+	elif number >= 0:
 		choose(CharacterDefs.ORDER[number])
 	elif step != 0:
 		_step_selection(step)
@@ -128,7 +150,25 @@ func open() -> void:
 		if focused != null:
 			focused.release_focus()
 	_apply_selection(false)
+	_update_bank()
 	_animate_entrance()
+
+
+## Öffnet den Bildschirm „Programm“ über der Kandidatenwahl (ohne Rücksicht auf die
+## Eingabesperre) und meldet program_requested. Die Wahl bleibt darunter offen. false bei
+## geschlossener Wahl oder wenn das Programm schon offen ist.
+func open_program() -> bool:
+	if not is_open() or is_program_open():
+		return false
+	program_requested.emit()
+	if is_instance_valid(unlock_screen):
+		unlock_screen.open()
+	return true
+
+
+## Liegt gerade der Bildschirm „Programm“ über der Kandidatenwahl?
+func is_program_open() -> bool:
+	return is_instance_valid(unlock_screen) and unlock_screen.is_open()
 
 
 ## Schließt die Kandidatenwahl ohne Wahl (nur Anzeige, Game.character_id bleibt unberührt).
@@ -164,7 +204,7 @@ func select(id: String) -> void:
 ## den Bildschirm und meldet character_chosen. Gibt false zurück und ändert nichts bei einer
 ## unbekannten ID oder geschlossenem Bildschirm.
 func choose(id: String) -> bool:
-	if not is_open() or not CharacterDefs.ORDER.has(id):
+	if not is_open() or is_program_open() or not CharacterDefs.ORDER.has(id):
 		return false
 	_selected = id
 	Game.character_id = id
@@ -237,7 +277,26 @@ func _build() -> void:
 	hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hint_label.pivot_offset_ratio = Vector2(0.5, 0.5)
 	UiStyle.anchor_box(hint_label, Vector2.ZERO, Vector2(0.0, CARD_TOP + CARD_SIZE.y + 34.0), Vector2(STAGE_SIZE.x, 30.0))
+	hint_label.add_theme_font_size_override("font_size", UiStyle.fit_font_size(HINT_TEXT, 18, STAGE_SIZE.x - 20.0, true, 13))
 	stage.add_child(hint_label)
+	# Konto und Programm oben rechts neben der Überschrift.
+	bank_label = UiStyle.make_label("", 20, UiStyle.COL_YELLOW, true)
+	bank_label.name = "Bank"
+	bank_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	bank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bank_label.pivot_offset_ratio = Vector2(1.0, 0.5)
+	UiStyle.anchor_box(bank_label, Vector2.ZERO, BANK_RECT.position, BANK_RECT.size)
+	stage.add_child(bank_label)
+	program_button = UiStyle.make_button("PROGRAMM", UiStyle.COL_YELLOW, 24)
+	program_button.name = "Program"
+	# Kein Tastatur-Fokus: Enter und Leertaste gehören der markierten Karte.
+	program_button.focus_mode = Control.FOCUS_NONE
+	program_button.custom_minimum_size = PROGRAM_BUTTON_RECT.size
+	program_button.pivot_offset_ratio = Vector2(0.5, 0.5)
+	UiStyle.anchor_box(program_button, Vector2.ZERO, PROGRAM_BUTTON_RECT.position, PROGRAM_BUTTON_RECT.size)
+	program_button.pressed.connect(_on_program_pressed)
+	stage.add_child(program_button)
+	_update_bank()
 
 
 func _make_card(index: int, id: String) -> Control:
@@ -518,12 +577,34 @@ func _on_unlocked() -> void:
 	UiStyle.pop(hint_label, 1.15, 0.2)
 
 
+## Zeigt den Kontostand aus Game.progress.
+func _update_bank() -> void:
+	if bank_label == null:
+		return
+	var text: String = "KONTO  %s" % UiStyle.format_int(Game.progress.bank)
+	bank_label.text = text
+	bank_label.add_theme_font_size_override("font_size", UiStyle.fit_font_size(text, 20, BANK_RECT.size.x - 8.0, true, 13))
+
+
+func _on_bank_changed(_bank: int, _gained: int) -> void:
+	_update_bank()
+	if is_open():
+		UiStyle.pop(bank_label, 1.2, 0.2)
+
+
+## Der Knopf beachtet die Sperre nach dem Öffnen wie jede andere Eingabe.
+func _on_program_pressed() -> void:
+	if is_input_locked():
+		return
+	open_program()
+
+
 # --- Eingabe --------------------------------------------------------------------------
 
 ## Maus auf einer Karte: Bewegung markiert sie, ein Linksklick wählt sie. Während der Sperre
 ## nach dem Öffnen wirkt beides nicht (ein ruhender Zeiger verdrängt die Vorauswahl nicht).
 func _on_card_gui_input(event: InputEvent, index: int) -> void:
-	if not is_open() or index < 0 or index >= cards.size():
+	if not is_open() or is_program_open() or index < 0 or index >= cards.size():
 		return
 	var id: String = CharacterDefs.ORDER[index]
 	if event is InputEventMouseMotion:

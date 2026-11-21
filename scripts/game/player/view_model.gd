@@ -16,7 +16,7 @@ extends Node3D
 ##       │       └─ Gun_<id> (Modell der Waffe, entsteht beim ersten Zeigen)
 ##       └─ Hand1 (rechte Hand, nur bei zwei Waffen sichtbar)
 ##           └─ Holder
-## Die neun Modelle:
+## Die 19 Modelle:
 ##   pistol           Dienstpistole: gelb-schwarz, Schlitten fährt zurück
 ##   revolver         Kandidatenschreck: silber-rot mit goldener Trommel, die sich weiterdreht
 ##   smg              Quotenhammer: türkis-pink, Magazin fällt beim Nachladen
@@ -26,10 +26,21 @@ extends Node3D
 ##   sniper           Fernbedienung: weiß-lila, langer Lauf, großes Zielfernrohr, Kammerstängel
 ##   minigun          Applausmaschine: pink-gelb, sechs Läufe, die sich drehen
 ##   rocket_launcher  Showfinale: grünes Rohr mit goldenen Ringen, rote Rakete vorn
+##   burst_pistol     Dreierpack: pink-weiß, hoher Schlitten mit drei Mündungen übereinander
+##   nail_gun         Bühnenbau: orange, stehender Druckzylinder, schräger Nagelstreifen
+##   machine_pistol   Werbeblock: mintgrün, dicker Laufmantel, Stangenmagazin quer zur Seite
+##   crossbow         Zielgerade: Holzschiene, türkise Wurfarme, Sehne, Bolzen mit Leuchtspitze
+##   grenade_launcher Knalleffekt: dicke orange Trommel mit vier Kammern, kurzes dickes Rohr
+##   flamethrower     Heiße Phase: lange Lanze mit Düse und Zündflamme, roter Tank darunter
+##   beam             Rotlicht: weiß, roter Leuchtstab zwischen zwei Zinken, Ringe, Leuchtzelle
+##   tesla            Kurzschluss: dunkelblau, Kupferspule mit leuchtender Kugel an der Spitze
+##   lmg              Marathonsendung: oliv, Laufmantel, Zweibein, Munitionskasten mit Gurt
+##   auto_shotgun     Zuschauerfrage: hellblau-weiß, dicker Lauf, große gelbe Trommel
 ## Jede Waffe hat einen Knoten "Muzzle" (Mündung): dort entsteht das Mündungsfeuer (Fx.muzzle_flash)
 ## und dort beginnt die Leuchtspur.
 
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
+const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const Fx := preload("res://scripts/game/fx/fx.gd")
 
 # --- Reine Optik ---
@@ -51,6 +62,16 @@ const WEAPON_OFFSETS: Dictionary = {
 	"sniper": Vector3(0.01, -0.045, 0.08),
 	"minigun": Vector3(0.0, -0.05, -0.02),
 	"rocket_launcher": Vector3(0.09, -0.03, 0.06),
+	"burst_pistol": Vector3(-0.02, 0.005, 0.05),
+	"nail_gun": Vector3(-0.015, 0.0, 0.05),
+	"machine_pistol": Vector3(-0.01, 0.0, 0.04),
+	"crossbow": Vector3(0.0, -0.005, 0.06),
+	"grenade_launcher": Vector3(-0.005, -0.01, 0.06),
+	"flamethrower": Vector3(0.0, -0.03, 0.1),
+	"beam": Vector3(0.0, -0.03, 0.1),
+	"tesla": Vector3(0.0, -0.03, 0.1),
+	"lmg": Vector3(0.0, -0.03, 0.12),
+	"auto_shotgun": Vector3(0.0, -0.02, 0.12),
 }
 ## Rückstoß je Waffe: zurück (m), Mündung hoch (rad), Verdrehen (rad, zufällig), seitlich (m, zufällig).
 const RECOIL: Dictionary = {
@@ -63,10 +84,23 @@ const RECOIL: Dictionary = {
 	"sniper": { "back": 0.2, "pitch": 0.3, "roll": 0.03, "side": 0.004 },
 	"minigun": { "back": 0.016, "pitch": 0.012, "roll": 0.03, "side": 0.007 },
 	"rocket_launcher": { "back": 0.2, "pitch": 0.22, "roll": 0.05, "side": 0.008 },
+	"burst_pistol": { "back": 0.045, "pitch": 0.13, "roll": 0.03, "side": 0.004 },
+	"nail_gun": { "back": 0.02, "pitch": 0.03, "roll": 0.03, "side": 0.005 },
+	"machine_pistol": { "back": 0.028, "pitch": 0.045, "roll": 0.05, "side": 0.008 },
+	"crossbow": { "back": 0.07, "pitch": 0.12, "roll": 0.03, "side": 0.004 },
+	"grenade_launcher": { "back": 0.15, "pitch": 0.3, "roll": 0.05, "side": 0.008 },
+	"flamethrower": { "back": 0.006, "pitch": 0.004, "roll": 0.02, "side": 0.004 },
+	"beam": { "back": 0.004, "pitch": 0.003, "roll": 0.012, "side": 0.003 },
+	"tesla": { "back": 0.08, "pitch": 0.12, "roll": 0.05, "side": 0.006 },
+	"lmg": { "back": 0.036, "pitch": 0.04, "roll": 0.035, "side": 0.006 },
+	"auto_shotgun": { "back": 0.11, "pitch": 0.2, "roll": 0.05, "side": 0.008 },
 }
+## Waffen ohne Mündungsfeuer: Flamme und Strahl haben ihr eigenes Bild, die Armbrust kein Pulver.
+const NO_MUZZLE_FLASH: Array[String] = ["flamethrower", "beam", "crossbow"]
 ## Wie stark die Waffe beim Nachladen kippt (1 = wie die Pistole). Schwere Waffen kippen weniger.
 const RELOAD_TILT: Dictionary = {
 	"rifle": 0.45, "sniper": 0.4, "minigun": 0.3, "rocket_launcher": 0.4,
+	"flamethrower": 0.4, "beam": 0.4, "tesla": 0.45, "lmg": 0.35, "auto_shotgun": 0.45,
 }
 ## Bei zwei Waffen kippen beide weniger, damit sie sich in der Bildmitte nicht kreuzen.
 const AKIMBO_RELOAD_TILT: float = 0.55
@@ -100,6 +134,12 @@ const COLOR_BLUE: Color = Color(0.12, 0.35, 0.95)
 const COLOR_ORANGE: Color = Color(1.0, 0.5, 0.08)
 const COLOR_GREEN: Color = Color(0.1, 0.62, 0.25)
 const COLOR_WOOD: Color = Color(0.55, 0.32, 0.14)
+const COLOR_MINT: Color = Color(0.45, 0.95, 0.7)
+const COLOR_NAVY: Color = Color(0.12, 0.16, 0.45)
+const COLOR_COPPER: Color = Color(0.85, 0.45, 0.2)
+const COLOR_CYAN: Color = Color(0.3, 0.9, 1.0)
+const COLOR_OLIVE: Color = Color(0.42, 0.5, 0.16)
+const COLOR_SKY: Color = Color(0.3, 0.72, 1.0)
 const COLOR_SKIN: Color = Color(0.93, 0.72, 0.58)
 const COLOR_SLEEVE: Color = Color(0.45, 0.2, 0.85)
 
@@ -155,7 +195,7 @@ class HandSlot:
 	## Drehung der Minigun-Läufe (Winkel und Tempo).
 	var spin: float = 0.0
 	var spin_speed: float = 0.0
-	## Steckt eine Rakete im Rohr?
+	## Steckt eine Rakete im Rohr (Raketenwerfer) oder ein Bolzen auf der Schiene (Armbrust)?
 	var rocket_loaded: bool = true
 
 	func reset_motion() -> void:
@@ -308,9 +348,10 @@ func play_fire(hand: int = 0) -> void:
 	slot.kick_roll = randf_range(-1.0, 1.0) * float(recoil["roll"])
 	slot.kick_side = randf_range(-1.0, 1.0) * float(recoil["side"])
 	slot.spin_speed = minf(slot.spin_speed + SPIN_PER_SHOT, SPIN_MAX)
-	if slot.weapon_id == "rocket_launcher":
+	if slot.weapon_id == "rocket_launcher" or slot.weapon_id == "crossbow":
 		slot.rocket_loaded = false
-	Fx.muzzle_flash(get_muzzle_node(hand))
+	if not NO_MUZZLE_FLASH.has(slot.weapon_id):
+		Fx.muzzle_flash(get_muzzle_node(hand))
 	_apply_pose(slot)
 
 
@@ -477,19 +518,40 @@ func _apply_pose(slot: HandSlot) -> void:
 			_pose_minigun(slot, reload_progress)
 		"rocket_launcher":
 			_pose_rocket_launcher(slot, reload_progress)
+		"burst_pistol":
+			_pose_pistol(slot, reload_progress, "burst_pistol")
+		"nail_gun":
+			pos.y += _pose_magazine(slot, "nail_gun/mag", reload_progress, 0.3)
+		"machine_pistol":
+			pos.y += _pose_magazine(slot, "machine_pistol/mag", reload_progress, 0.42)
+		"crossbow":
+			_pose_crossbow(slot, reload_progress)
+		"grenade_launcher":
+			_pose_grenade_launcher(slot, reload_progress)
+		"flamethrower":
+			pos.y += _pose_magazine(slot, "flamethrower/tank", reload_progress, 0.36)
+		"beam":
+			_pose_cell(slot, "beam/cell", reload_progress, Vector3(0.0, 0.16, 0.06))
+		"tesla":
+			pos.y += _pose_magazine(slot, "tesla/cell", reload_progress, 0.3)
+		"lmg":
+			pos.y += _pose_magazine(slot, "lmg/box", reload_progress, 0.4)
+		"auto_shotgun":
+			pos.y += _pose_magazine(slot, "auto_shotgun/drum", reload_progress, 0.42)
 	slot.holder.position = pos
 	slot.holder.rotation = rot
 
 
 ## Pistole: Schlitten schnellt beim Schuss zurück, Magazin fällt beim Nachladen heraus.
-func _pose_pistol(slot: HandSlot, reload_progress: float) -> void:
+## prefix nennt die Waffe, deren Teile "<prefix>/slide" und "<prefix>/mag" bewegt werden.
+func _pose_pistol(slot: HandSlot, reload_progress: float, prefix: String = "pistol") -> void:
 	var slide: float = maxf(0.0, 1.0 - slot.fire_age / SLIDE_TIME)
 	var mag_drop: float = 0.0
 	if slot.is_reloading:
 		mag_drop = _window(reload_progress, 0.16, 0.3, 0.5, 0.68)
 		slide = maxf(slide, _window(reload_progress, 0.76, 0.84, 0.88, 0.95))
-	_set_part(slot, "pistol/slide", Vector3(0.0, 0.0, SLIDE_TRAVEL * slide))
-	_set_part(slot, "pistol/mag", Vector3(0.0, -0.24 * mag_drop, 0.05 * mag_drop))
+	_set_part(slot, prefix + "/slide", Vector3(0.0, 0.0, SLIDE_TRAVEL * slide))
+	_set_part(slot, prefix + "/mag", Vector3(0.0, -0.24 * mag_drop, 0.05 * mag_drop))
 
 
 ## Revolver: Die Trommel dreht sich je Schuss ein Sechstel weiter. Beim Nachladen schwenkt sie
@@ -586,6 +648,51 @@ func _pose_rocket_launcher(slot: HandSlot, reload_progress: float) -> void:
 	_set_part(slot, "rocket_launcher/rocket", Vector3.ZERO)
 
 
+## Armbrust: Nach dem Schuss ist die Schiene leer und die Sehne entspannt. Beim Nachladen wird
+## die Sehne gespannt, dann schiebt sich der neue Bolzen von hinten auf die Schiene.
+func _pose_crossbow(slot: HandSlot, reload_progress: float) -> void:
+	var bolt: Node3D = slot.parts.get("crossbow/bolt", null) as Node3D
+	var drawn: Node3D = slot.parts.get("crossbow/string", null) as Node3D
+	var loose: Node3D = slot.parts.get("crossbow/string_loose", null) as Node3D
+	if bolt == null or drawn == null or loose == null:
+		return
+	var cocked: bool = slot.rocket_loaded
+	var bolt_shown: bool = slot.rocket_loaded
+	var slide_in: float = 1.0
+	if slot.is_reloading:
+		cocked = reload_progress > 0.35
+		bolt_shown = reload_progress > 0.5
+		slide_in = smoothstep(0.5, 0.8, reload_progress)
+	drawn.visible = cocked
+	loose.visible = not cocked
+	bolt.visible = bolt_shown
+	_set_part(slot, "crossbow/bolt", Vector3(0.0, 0.03 * (1.0 - slide_in), 0.2 * (1.0 - slide_in)))
+
+
+## Granatwerfer: Die Trommel dreht sich je Schuss eine Kammer weiter. Beim Nachladen schwenkt sie
+## zur Seite heraus und dreht durch.
+func _pose_grenade_launcher(slot: HandSlot, reload_progress: float) -> void:
+	var step: float = clampf(slot.fire_age / 0.22, 0.0, 1.0)
+	var angle: float = (float(slot.shots) - 1.0 + _ease_out(step)) * TAU / 4.0
+	var swing: float = 0.0
+	if slot.is_reloading:
+		swing = _window(reload_progress, 0.12, 0.26, 0.72, 0.86)
+		angle += reload_progress * TAU
+	_set_part(slot, "grenade_launcher/drum", Vector3(-0.1 * swing, -0.03 * swing, 0.0))
+	var drum: Node3D = slot.parts.get("grenade_launcher/drum", null) as Node3D
+	if drum != null:
+		drum.rotation.z = angle
+
+
+## Waffen mit einer Zelle, die beim Nachladen um travel aus der Waffe fährt und wieder einrastet
+## (Rotlicht: die Leuchtzelle oben).
+func _pose_cell(slot: HandSlot, key: String, reload_progress: float, travel: Vector3) -> void:
+	var out: float = 0.0
+	if slot.is_reloading:
+		out = _window(reload_progress, 0.14, 0.3, 0.5, 0.68)
+	_set_part(slot, key, travel * out)
+
+
 ## Verschiebt ein bewegliches Teil um offset aus seiner Ruhelage.
 func _set_part(slot: HandSlot, key: String, offset: Vector3) -> void:
 	var part: Node3D = slot.parts.get(key, null) as Node3D
@@ -628,6 +735,50 @@ func _build_model(slot: HandSlot, id: String) -> void:
 			_build_minigun(slot)
 		"rocket_launcher":
 			_build_rocket_launcher(slot)
+		"burst_pistol":
+			_build_burst_pistol(slot)
+		"nail_gun":
+			_build_nail_gun(slot)
+		"machine_pistol":
+			_build_machine_pistol(slot)
+		"crossbow":
+			_build_crossbow(slot)
+		"grenade_launcher":
+			_build_grenade_launcher(slot)
+		"flamethrower":
+			_build_flamethrower(slot)
+		"beam":
+			_build_beam(slot)
+		"tesla":
+			_build_tesla(slot)
+		"lmg":
+			_build_lmg(slot)
+		"auto_shotgun":
+			_build_auto_shotgun(slot)
+		_:
+			_build_placeholder(slot, id)
+
+
+## Platzhalter für eine Waffe ohne eigenes Modell (alle 19 Waffen haben eines, das hier greift
+## nur für eine künftige Waffe): schlichtes Gehäuse mit Lauf, Griff, Magazin und Mündung.
+## Zweihand-Waffen sind länger. Ohne Eintrag in RECOIL gibt es dafür weder Rückstoß noch
+## Mündungsfeuer.
+func _build_placeholder(slot: HandSlot, id: String) -> void:
+	var gun: Node3D = _new_gun(slot, id)
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var yellow: StandardMaterial3D = _material(COLOR_YELLOW, 0.0, 0.1)
+	var length: float = 0.46 if ItemDefs.hands(id) > 1 else 0.26
+	_box(gun, Vector3(0.055, 0.07, length), Vector3(0.0, 0.02, 0.05 - length * 0.5), steel)
+	_box(gun, Vector3(0.059, 0.016, length * 0.5), Vector3(0.0, 0.03, 0.02 - length * 0.5), yellow)
+	_cylinder(gun, 0.016, 0.12, Vector3(0.0, 0.03, -length), steel)
+	_box(gun, Vector3(0.012, 0.018, 0.018), Vector3(0.0, 0.064, 0.08 - length), _material(COLOR_PINK, 1.6, 0.0))
+	_box(gun, Vector3(0.03, 0.016, 0.016), Vector3(0.0, 0.063, 0.03), steel)
+	_box(gun, Vector3(0.012, 0.04, 0.07), Vector3(0.0, -0.035, -0.07), steel)
+	var grip: MeshInstance3D = _box(gun, Vector3(0.044, 0.14, 0.066), Vector3(0.0, -0.085, 0.012), yellow)
+	grip.rotation.x = -0.24
+	_box(gun, Vector3(0.036, 0.1, 0.05), Vector3(0.0, -0.065, -0.15), _material(COLOR_TEAL, 0.4, 0.3))
+	_add_muzzle(slot, gun, id, Vector3(0.0, 0.03, -length - 0.065))
+	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.02))
 
 
 func _build_pistol(slot: HandSlot) -> void:
@@ -887,6 +1038,325 @@ func _build_rocket_launcher(slot: HandSlot) -> void:
 	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.01))
 
 
+# --- Die zehn Waffen aus Abschnitt 22.2 ---
+
+
+func _build_burst_pistol(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "burst_pistol")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var pink: StandardMaterial3D = _material(COLOR_PINK, 0.0, 0.3)
+	var white: StandardMaterial3D = _material(COLOR_WHITE, 0.0, 0.1)
+	# Hoher Schlitten mit drei Mündungen übereinander.
+	var slide: Node3D = _new_part(slot, gun, "burst_pistol/slide", Vector3(0.0, 0.04, -0.1))
+	_box(slide, Vector3(0.052, 0.088, 0.27), Vector3.ZERO, pink)
+	_box(slide, Vector3(0.056, 0.016, 0.12), Vector3(0.0, 0.022, 0.05), white)
+	for i: int in 3:
+		_cylinder(slide, 0.012, 0.03, Vector3(0.0, -0.027 + 0.027 * float(i), -0.145), steel)
+	_box(slide, Vector3(0.012, 0.016, 0.016), Vector3(0.0, 0.052, -0.12), _material(COLOR_YELLOW, 1.6, 0.0))
+	_box(slide, Vector3(0.03, 0.014, 0.014), Vector3(0.0, 0.051, 0.12), steel)
+	_box(gun, Vector3(0.046, 0.03, 0.22), Vector3(0.0, -0.018, -0.09), white)
+	_box(gun, Vector3(0.012, 0.04, 0.075), Vector3(0.0, -0.05, -0.075), steel)
+	_box(gun, Vector3(0.046, 0.15, 0.07), Vector3(0.0, -0.095, 0.012), white).rotation.x = -0.24
+	# Drei Streifen am Griff.
+	for i: int in 3:
+		_box(gun, Vector3(0.05, 0.014, 0.05), Vector3(0.0, -0.065 - 0.03 * float(i), 0.006 + 0.007 * float(i)), pink).rotation.x = -0.24
+	# Langes Magazin, das unten aus dem Griff ragt.
+	var mag: Node3D = _new_part(slot, gun, "burst_pistol/mag", Vector3(0.0, -0.115, 0.018))
+	mag.rotation.x = -0.24
+	_box(mag, Vector3(0.032, 0.2, 0.048), Vector3.ZERO, _material(COLOR_YELLOW, 0.3, 0.2))
+	_add_muzzle(slot, gun, "burst_pistol", Vector3(0.0, 0.04, -0.265))
+	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.02))
+
+
+func _build_nail_gun(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "nail_gun")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var orange: StandardMaterial3D = _material(COLOR_ORANGE, 0.0, 0.1)
+	var yellow: StandardMaterial3D = _material(COLOR_YELLOW, 0.0, 0.1)
+	var silver: StandardMaterial3D = _material(COLOR_SILVER, 0.0, 0.8)
+	# Gehäuse mit Warnstreifen, darauf ein stehender Druckzylinder.
+	_box(gun, Vector3(0.07, 0.11, 0.2), Vector3(0.0, 0.03, -0.06), orange)
+	_box(gun, Vector3(0.074, 0.02, 0.2), Vector3(0.0, 0.0, -0.06), yellow)
+	var cap: MeshInstance3D = _cylinder(gun, 0.05, 0.09, Vector3(0.0, 0.125, -0.03), steel)
+	cap.rotation.x = 0.0
+	var lid: MeshInstance3D = _cylinder(gun, 0.038, 0.02, Vector3(0.0, 0.178, -0.03), orange)
+	lid.rotation.x = 0.0
+	# Nase mit Nagelstift und Aufsetzbügel.
+	_box(gun, Vector3(0.042, 0.055, 0.1), Vector3(0.0, 0.02, -0.2), steel)
+	_cylinder(gun, 0.008, 0.07, Vector3(0.0, 0.02, -0.28), silver)
+	_box(gun, Vector3(0.05, 0.012, 0.012), Vector3(0.0, 0.02, -0.305), yellow)
+	# Schräger Nagelstreifen von der Nase zum Griffende.
+	var mag: Node3D = _new_part(slot, gun, "nail_gun/mag", Vector3(0.0, -0.085, -0.1))
+	mag.rotation.x = -0.5
+	_box(mag, Vector3(0.03, 0.05, 0.27), Vector3.ZERO, _material(COLOR_LIME, 0.5, 0.1))
+	for i: int in 5:
+		_box(mag, Vector3(0.034, 0.054, 0.008), Vector3(0.0, 0.0, -0.1 + 0.05 * float(i)), silver)
+	_box(gun, Vector3(0.044, 0.14, 0.06), Vector3(0.0, -0.075, 0.035), orange).rotation.x = -0.2
+	_box(gun, Vector3(0.048, 0.03, 0.064), Vector3(0.0, -0.15, 0.05), steel).rotation.x = -0.2
+	_box(gun, Vector3(0.012, 0.035, 0.06), Vector3(0.0, -0.045, -0.03), steel)
+	_add_muzzle(slot, gun, "nail_gun", Vector3(0.0, 0.02, -0.32))
+	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.045))
+
+
+func _build_machine_pistol(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "machine_pistol")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var mint: StandardMaterial3D = _material(COLOR_MINT, 0.0, 0.2)
+	var yellow: StandardMaterial3D = _material(COLOR_YELLOW, 0.3, 0.2)
+	# Kurzer Kasten mit Schiene, davor ein dicker Laufmantel mit gelben Ringen.
+	_box(gun, Vector3(0.06, 0.085, 0.26), Vector3(0.0, 0.025, -0.06), mint)
+	_box(gun, Vector3(0.03, 0.016, 0.22), Vector3(0.0, 0.075, -0.06), steel)
+	_box(gun, Vector3(0.014, 0.022, 0.016), Vector3(0.0, 0.094, -0.15), _material(COLOR_PINK, 1.6, 0.0))
+	_box(gun, Vector3(0.03, 0.02, 0.014), Vector3(0.0, 0.093, 0.03), steel)
+	_cylinder(gun, 0.018, 0.08, Vector3(0.0, 0.03, -0.23), steel)
+	_cylinder(gun, 0.03, 0.1, Vector3(0.0, 0.03, -0.31), steel)
+	_cylinder(gun, 0.033, 0.014, Vector3(0.0, 0.03, -0.28), yellow)
+	_cylinder(gun, 0.033, 0.014, Vector3(0.0, 0.03, -0.34), yellow)
+	# Kurzer Stummel hinten statt eines Schafts.
+	_box(gun, Vector3(0.04, 0.05, 0.05), Vector3(0.0, 0.03, 0.095), steel)
+	# Das Stangenmagazin steckt quer in der Seite (aus Sicht des Schützen links).
+	_box(gun, Vector3(0.03, 0.05, 0.064), Vector3(-0.04, 0.03, -0.1), steel)
+	var mag: Node3D = _new_part(slot, gun, "machine_pistol/mag", Vector3(-0.135, 0.03, -0.1))
+	_box(mag, Vector3(0.17, 0.032, 0.046), Vector3.ZERO, yellow)
+	_box(mag, Vector3(0.02, 0.038, 0.052), Vector3(-0.08, 0.0, 0.0), steel)
+	_box(gun, Vector3(0.046, 0.13, 0.066), Vector3(0.0, -0.08, 0.0), steel).rotation.x = -0.1
+	_box(gun, Vector3(0.012, 0.035, 0.06), Vector3(0.0, -0.04, -0.065), steel)
+	_add_muzzle(slot, gun, "machine_pistol", Vector3(0.0, 0.03, -0.375))
+	_add_grip_hand(gun, Vector3(0.0, -0.095, 0.012))
+
+
+func _build_crossbow(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "crossbow")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var wood: StandardMaterial3D = _material(COLOR_WOOD, 0.0, 0.0)
+	var teal: StandardMaterial3D = _material(COLOR_TEAL, 0.0, 0.3)
+	var gold: StandardMaterial3D = _material(COLOR_GOLD, 0.25, 0.7)
+	var cord: StandardMaterial3D = _material(COLOR_WHITE, 0.6, 0.0)
+	# Schiene aus Holz mit türkiser Führung.
+	_box(gun, Vector3(0.04, 0.045, 0.5), Vector3(0.0, 0.02, -0.15), wood)
+	_box(gun, Vector3(0.016, 0.01, 0.46), Vector3(0.0, 0.046, -0.16), teal)
+	# Zwei Wurfarme quer an der Spitze, nach hinten gepfeilt, mit goldenen Enden.
+	for side: float in [-1.0, 1.0]:
+		_box(gun, Vector3(0.2, 0.022, 0.03), Vector3(0.1 * side, 0.03, -0.345), teal).rotation.y = -0.35 * side
+		_box(gun, Vector3(0.03, 0.04, 0.04), Vector3(0.19 * side, 0.03, -0.31), gold)
+	_box(gun, Vector3(0.06, 0.05, 0.05), Vector3(0.0, 0.025, -0.38), steel)
+	# Steigbügel vorn.
+	_box(gun, Vector3(0.07, 0.012, 0.012), Vector3(0.0, 0.02, -0.45), steel)
+	for side: float in [-1.0, 1.0]:
+		_box(gun, Vector3(0.012, 0.012, 0.05), Vector3(0.03 * side, 0.02, -0.425), steel)
+	# Sehne: gespannt als V bis zur Nuss, entspannt gerade zwischen den Armen.
+	var drawn: Node3D = _new_part(slot, gun, "crossbow/string", Vector3(0.0, 0.052, 0.0))
+	for side: float in [-1.0, 1.0]:
+		_box(drawn, Vector3(0.006, 0.006, 0.32), Vector3(0.095 * side, 0.0, -0.18), cord).rotation.y = -0.635 * side
+	var loose: Node3D = _new_part(slot, gun, "crossbow/string_loose", Vector3(0.0, 0.052, -0.31))
+	_box(loose, Vector3(0.38, 0.006, 0.006), Vector3.ZERO, cord)
+	loose.visible = false
+	_box(gun, Vector3(0.03, 0.03, 0.04), Vector3(0.0, 0.055, -0.045), gold)
+	# Bolzen mit leuchtender Spitze und Federn.
+	var bolt: Node3D = _new_part(slot, gun, "crossbow/bolt", Vector3(0.0, 0.06, -0.21))
+	_cylinder(bolt, 0.007, 0.34, Vector3.ZERO, steel)
+	_tapered(bolt, 0.002, 0.018, 0.06, Vector3(0.0, 0.0, -0.2), _material(COLOR_LIME, 1.8, 0.0))
+	_box(bolt, Vector3(0.03, 0.003, 0.05), Vector3(0.0, 0.0, 0.14), teal)
+	_box(bolt, Vector3(0.003, 0.03, 0.05), Vector3(0.0, 0.0, 0.14), teal)
+	# Visier, Griff, Abzugsbügel.
+	_box(gun, Vector3(0.012, 0.03, 0.012), Vector3(0.0, 0.09, 0.02), _material(COLOR_GOLD, 1.8, 0.0))
+	_box(gun, Vector3(0.03, 0.04, 0.03), Vector3(0.0, 0.06, 0.02), steel)
+	_box(gun, Vector3(0.044, 0.14, 0.062), Vector3(0.0, -0.07, 0.05), wood).rotation.x = -0.3
+	_box(gun, Vector3(0.012, 0.035, 0.07), Vector3(0.0, -0.025, -0.03), steel)
+	_add_muzzle(slot, gun, "crossbow", Vector3(0.0, 0.06, -0.46))
+	_add_grip_hand(gun, Vector3(0.0, -0.095, 0.06))
+
+
+func _build_grenade_launcher(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "grenade_launcher")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var orange: StandardMaterial3D = _material(COLOR_ORANGE, 0.0, 0.2)
+	var yellow: StandardMaterial3D = _material(COLOR_YELLOW, 0.3, 0.2)
+	# Rahmen: Block hinten, Steg oben, Block vorn, dazwischen die Trommel.
+	_box(gun, Vector3(0.06, 0.13, 0.06), Vector3(0.0, 0.01, 0.035), steel)
+	_box(gun, Vector3(0.03, 0.02, 0.2), Vector3(0.0, 0.1, -0.065), steel)
+	_box(gun, Vector3(0.06, 0.13, 0.03), Vector3(0.0, 0.01, -0.165), steel)
+	# Dicke Trommel mit vier Kammern. Die obere liegt hinter dem Rohr.
+	var drum: Node3D = _new_part(slot, gun, "grenade_launcher/drum", Vector3(0.0, 0.0, -0.065))
+	_cylinder(drum, 0.075, 0.11, Vector3.ZERO, orange)
+	for i: int in 4:
+		var angle: float = PI * 0.5 * float(i + 1)
+		_cylinder(drum, 0.024, 0.116, Vector3(cos(angle) * 0.043, sin(angle) * 0.043, 0.0), yellow)
+	_cylinder(drum, 0.014, 0.12, Vector3.ZERO, steel)
+	# Kurzes, dickes Rohr mit Warnring und Mündungsring.
+	_cylinder(gun, 0.04, 0.2, Vector3(0.0, 0.043, -0.28), steel)
+	_cylinder(gun, 0.044, 0.03, Vector3(0.0, 0.043, -0.25), yellow)
+	_cylinder(gun, 0.05, 0.03, Vector3(0.0, 0.043, -0.375), orange)
+	# Klappvisier, Griff, Abzugsbügel.
+	_box(gun, Vector3(0.012, 0.06, 0.012), Vector3(0.0, 0.14, -0.15), _material(COLOR_LIME, 1.6, 0.0))
+	_box(gun, Vector3(0.03, 0.02, 0.012), Vector3(0.0, 0.12, 0.02), steel)
+	_box(gun, Vector3(0.046, 0.15, 0.066), Vector3(0.0, -0.11, 0.06), orange).rotation.x = -0.25
+	_box(gun, Vector3(0.012, 0.035, 0.07), Vector3(0.0, -0.075, -0.01), steel)
+	_add_muzzle(slot, gun, "grenade_launcher", Vector3(0.0, 0.043, -0.4))
+	_add_grip_hand(gun, Vector3(0.0, -0.125, 0.07))
+
+
+func _build_flamethrower(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "flamethrower")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var red: StandardMaterial3D = _material(COLOR_RED, 0.0, 0.2)
+	var yellow: StandardMaterial3D = _material(COLOR_YELLOW, 0.0, 0.1)
+	var gold: StandardMaterial3D = _material(COLOR_GOLD, 0.25, 0.7)
+	# Gehäuse, davor die lange dünne Lanze mit roten Kühlringen und einer Düse.
+	_box(gun, Vector3(0.05, 0.065, 0.36), Vector3(0.0, 0.03, -0.05), steel)
+	_box(gun, Vector3(0.054, 0.02, 0.3), Vector3(0.0, 0.05, -0.05), yellow)
+	_cylinder(gun, 0.016, 0.42, Vector3(0.0, 0.04, -0.44), steel)
+	for i: int in 4:
+		_cylinder(gun, 0.027, 0.02, Vector3(0.0, 0.04, -0.3 - 0.08 * float(i)), red)
+	_tapered(gun, 0.04, 0.018, 0.09, Vector3(0.0, 0.04, -0.69), yellow)
+	# Zündflamme: dünnes Rohr unter der Lanze mit leuchtender Spitze.
+	_cylinder(gun, 0.006, 0.3, Vector3(0.0, 0.004, -0.56), steel)
+	_box(gun, Vector3(0.018, 0.018, 0.03), Vector3(0.0, 0.004, -0.72), _material(COLOR_ORANGE, 2.5, 0.0))
+	# Roter Tank unter dem Gehäuse, mit goldenen Kappen und Warnstreifen.
+	var tank: Node3D = _new_part(slot, gun, "flamethrower/tank", Vector3(0.0, -0.075, -0.1))
+	_cylinder(tank, 0.062, 0.28, Vector3.ZERO, red)
+	_cylinder(tank, 0.066, 0.03, Vector3(0.0, 0.0, -0.13), gold)
+	_cylinder(tank, 0.066, 0.03, Vector3(0.0, 0.0, 0.13), gold)
+	_cylinder(tank, 0.064, 0.04, Vector3.ZERO, yellow)
+	_box(gun, Vector3(0.016, 0.05, 0.016), Vector3(0.0, -0.02, 0.06), steel)
+	# Kurzer Schaft, Griff.
+	_box(gun, Vector3(0.05, 0.075, 0.2), Vector3(0.0, 0.01, 0.23), red)
+	_box(gun, Vector3(0.054, 0.1, 0.03), Vector3(0.0, 0.0, 0.34), steel)
+	_box(gun, Vector3(0.042, 0.12, 0.055), Vector3(0.0, -0.075, 0.12), steel).rotation.x = -0.28
+	_add_support_hand(gun, Vector3(-0.005, -0.01, -0.36))
+	_add_muzzle(slot, gun, "flamethrower", Vector3(0.0, 0.04, -0.74))
+	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.13))
+
+
+func _build_beam(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "beam")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var white: StandardMaterial3D = _material(COLOR_WHITE, 0.0, 0.1)
+	var glow: StandardMaterial3D = _material(COLOR_RED, 2.4, 0.0)
+	# Weißes Gehäuse mit dunkler Unterseite und Kühlrippen.
+	_box(gun, Vector3(0.07, 0.1, 0.34), Vector3(0.0, 0.02, -0.04), white)
+	_box(gun, Vector3(0.074, 0.03, 0.26), Vector3(0.0, -0.02, -0.04), steel)
+	for i: int in 3:
+		_box(gun, Vector3(0.09, 0.05, 0.012), Vector3(0.0, 0.025, -0.13 + 0.05 * float(i)), steel)
+	# Roter Leuchtstab zwischen zwei Zinken, darum drei Ringe, vorn die Linse.
+	_cylinder(gun, 0.014, 0.42, Vector3(0.0, 0.03, -0.42), glow)
+	for i: int in 3:
+		_cylinder(gun, 0.046 - 0.007 * float(i), 0.03, Vector3(0.0, 0.03, -0.27 - 0.12 * float(i)), steel)
+	_box(gun, Vector3(0.02, 0.014, 0.44), Vector3(0.0, 0.088, -0.43), white)
+	_box(gun, Vector3(0.02, 0.014, 0.44), Vector3(0.0, -0.028, -0.43), white)
+	_cylinder(gun, 0.03, 0.02, Vector3(0.0, 0.03, -0.64), glow)
+	# Leuchtzelle oben, die beim Nachladen herausfährt.
+	var cell: Node3D = _new_part(slot, gun, "beam/cell", Vector3(0.0, 0.085, 0.02))
+	_box(cell, Vector3(0.05, 0.04, 0.14), Vector3.ZERO, _material(COLOR_RED, 1.2, 0.0))
+	_box(cell, Vector3(0.054, 0.044, 0.02), Vector3(0.0, 0.0, 0.06), steel)
+	# Schaft und Griff.
+	_box(gun, Vector3(0.05, 0.085, 0.24), Vector3(0.0, 0.0, 0.25), white)
+	_box(gun, Vector3(0.054, 0.12, 0.03), Vector3(0.0, -0.01, 0.38), steel)
+	_box(gun, Vector3(0.042, 0.12, 0.055), Vector3(0.0, -0.085, 0.1), steel).rotation.x = -0.28
+	_add_support_hand(gun, Vector3(-0.005, -0.07, -0.3))
+	_add_muzzle(slot, gun, "beam", Vector3(0.0, 0.03, -0.66))
+	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.11))
+
+
+func _build_tesla(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "tesla")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var navy: StandardMaterial3D = _material(COLOR_NAVY, 0.0, 0.3)
+	var copper: StandardMaterial3D = _material(COLOR_COPPER, 0.2, 0.8)
+	var gold: StandardMaterial3D = _material(COLOR_GOLD, 0.25, 0.7)
+	var spark: StandardMaterial3D = _material(COLOR_CYAN, 2.5, 0.0)
+	# Dunkelblaues Gehäuse mit goldener Leiste und zwei Kondensatoren an den Seiten.
+	_box(gun, Vector3(0.07, 0.1, 0.3), Vector3(0.0, 0.02, -0.03), navy)
+	_box(gun, Vector3(0.074, 0.02, 0.22), Vector3(0.0, 0.05, -0.03), gold)
+	for side: float in [-1.0, 1.0]:
+		_cylinder(gun, 0.022, 0.16, Vector3(0.05 * side, 0.03, -0.02), steel)
+		_cylinder(gun, 0.024, 0.02, Vector3(0.05 * side, 0.03, -0.1), spark)
+	# Kupferspule um einen Stab, an der Spitze die leuchtende Kugel zwischen zwei Zinken.
+	_cylinder(gun, 0.012, 0.4, Vector3(0.0, 0.03, -0.38), steel)
+	for i: int in 6:
+		_cylinder(gun, 0.042, 0.024, Vector3(0.0, 0.03, -0.23 - 0.05 * float(i)), copper)
+	_ball(gun, 0.045, Vector3(0.0, 0.03, -0.6), spark)
+	for side: float in [-1.0, 1.0]:
+		_box(gun, Vector3(0.012, 0.012, 0.14), Vector3(0.05 * side, 0.03, -0.58), gold).rotation.y = 0.25 * side
+	# Zelle unter dem Gehäuse.
+	var cell: Node3D = _new_part(slot, gun, "tesla/cell", Vector3(0.0, -0.065, -0.08))
+	_box(cell, Vector3(0.05, 0.07, 0.12), Vector3.ZERO, _material(COLOR_CYAN, 0.8, 0.0))
+	_box(cell, Vector3(0.054, 0.02, 0.124), Vector3(0.0, -0.03, 0.0), steel)
+	# Schaft und Griff.
+	_box(gun, Vector3(0.05, 0.085, 0.26), Vector3(0.0, 0.0, 0.25), navy)
+	_box(gun, Vector3(0.054, 0.12, 0.03), Vector3(0.0, -0.01, 0.39), gold)
+	_box(gun, Vector3(0.042, 0.12, 0.055), Vector3(0.0, -0.085, 0.09), steel).rotation.x = -0.28
+	_add_support_hand(gun, Vector3(-0.005, -0.05, -0.28))
+	_add_muzzle(slot, gun, "tesla", Vector3(0.0, 0.03, -0.66))
+	_add_grip_hand(gun, Vector3(0.0, -0.1, 0.1))
+
+
+func _build_lmg(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "lmg")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var olive: StandardMaterial3D = _material(COLOR_OLIVE, 0.0, 0.2)
+	var gold: StandardMaterial3D = _material(COLOR_GOLD, 0.25, 0.7)
+	# Langes Gehäuse mit Deckel, dicker Laufmantel mit Ringen, Lauf mit Mündungstrichter.
+	_box(gun, Vector3(0.065, 0.11, 0.44), Vector3(0.0, 0.02, -0.06), olive)
+	_box(gun, Vector3(0.069, 0.025, 0.2), Vector3(0.0, 0.085, 0.0), steel)
+	_cylinder(gun, 0.03, 0.3, Vector3(0.0, 0.035, -0.43), steel)
+	for i: int in 4:
+		_cylinder(gun, 0.034, 0.02, Vector3(0.0, 0.035, -0.32 - 0.07 * float(i)), olive)
+	_cylinder(gun, 0.016, 0.2, Vector3(0.0, 0.035, -0.68), steel)
+	_tapered(gun, 0.03, 0.018, 0.06, Vector3(0.0, 0.035, -0.8), gold)
+	# Tragegriff oben, Korn, eingeklapptes Zweibein unter dem Mantel.
+	_box(gun, Vector3(0.024, 0.016, 0.2), Vector3(0.0, 0.15, -0.12), steel)
+	_box(gun, Vector3(0.024, 0.05, 0.022), Vector3(0.0, 0.12, -0.04), steel)
+	_box(gun, Vector3(0.024, 0.05, 0.022), Vector3(0.0, 0.12, -0.2), steel)
+	_box(gun, Vector3(0.014, 0.05, 0.016), Vector3(0.0, 0.085, -0.56), _material(COLOR_ORANGE, 1.6, 0.0))
+	for side: float in [-1.0, 1.0]:
+		_box(gun, Vector3(0.012, 0.012, 0.28), Vector3(0.028 * side, -0.005, -0.44), steel)
+	# Munitionskasten links unter dem Gehäuse, der Gurt läuft hoch in den Deckel.
+	var box: Node3D = _new_part(slot, gun, "lmg/box", Vector3(-0.03, -0.11, -0.1))
+	_box(box, Vector3(0.11, 0.12, 0.16), Vector3.ZERO, olive)
+	_box(box, Vector3(0.114, 0.025, 0.164), Vector3(0.0, 0.05, 0.0), steel)
+	for i: int in 4:
+		_box(gun, Vector3(0.016, 0.03, 0.05), Vector3(-0.045, -0.035 + 0.03 * float(i), -0.05), gold)
+	# Schaft und Griff.
+	_box(gun, Vector3(0.05, 0.09, 0.3), Vector3(0.0, 0.0, 0.31), olive)
+	_box(gun, Vector3(0.054, 0.13, 0.03), Vector3(0.0, -0.01, 0.47), steel)
+	_box(gun, Vector3(0.042, 0.12, 0.055), Vector3(0.0, -0.09, 0.11), steel).rotation.x = -0.28
+	_add_support_hand(gun, Vector3(-0.005, -0.04, -0.42))
+	_add_muzzle(slot, gun, "lmg", Vector3(0.0, 0.035, -0.84))
+	_add_grip_hand(gun, Vector3(0.0, -0.105, 0.12))
+
+
+func _build_auto_shotgun(slot: HandSlot) -> void:
+	var gun: Node3D = _new_gun(slot, "auto_shotgun")
+	var steel: StandardMaterial3D = _material(COLOR_STEEL, 0.0, 0.6)
+	var sky: StandardMaterial3D = _material(COLOR_SKY, 0.0, 0.3)
+	var white: StandardMaterial3D = _material(COLOR_WHITE, 0.0, 0.1)
+	var yellow: StandardMaterial3D = _material(COLOR_YELLOW, 0.3, 0.2)
+	# Gehäuse, dicker Lauf mit Hitzeschild und Mündungsbremse, Gasrohr darunter.
+	_box(gun, Vector3(0.066, 0.1, 0.36), Vector3(0.0, 0.015, -0.02), sky)
+	_box(gun, Vector3(0.07, 0.024, 0.3), Vector3(0.0, 0.03, -0.02), white)
+	_cylinder(gun, 0.028, 0.48, Vector3(0.0, 0.03, -0.44), steel)
+	_box(gun, Vector3(0.05, 0.014, 0.36), Vector3(0.0, 0.066, -0.42), white)
+	for i: int in 4:
+		_box(gun, Vector3(0.054, 0.018, 0.03), Vector3(0.0, 0.066, -0.29 - 0.08 * float(i)), steel)
+	_cylinder(gun, 0.016, 0.3, Vector3(0.0, -0.012, -0.36), sky)
+	_cylinder(gun, 0.037, 0.06, Vector3(0.0, 0.03, -0.7), yellow)
+	_box(gun, Vector3(0.014, 0.03, 0.014), Vector3(0.0, 0.09, -0.58), _material(COLOR_PINK, 1.6, 0.0))
+	# Große Trommel quer unter dem Gehäuse.
+	var drum: Node3D = _new_part(slot, gun, "auto_shotgun/drum", Vector3(0.0, -0.115, -0.08))
+	_cylinder(drum, 0.088, 0.07, Vector3.ZERO, yellow).rotation = Vector3(0.0, 0.0, PI * 0.5)
+	_cylinder(drum, 0.092, 0.016, Vector3.ZERO, steel).rotation = Vector3(0.0, 0.0, PI * 0.5)
+	_cylinder(drum, 0.03, 0.084, Vector3.ZERO, steel).rotation = Vector3(0.0, 0.0, PI * 0.5)
+	_box(drum, Vector3(0.04, 0.07, 0.06), Vector3(0.0, 0.075, 0.0), steel)
+	# Schaft und Griff.
+	_box(gun, Vector3(0.05, 0.095, 0.3), Vector3(0.0, -0.01, 0.3), sky).rotation.x = -0.08
+	_box(gun, Vector3(0.054, 0.13, 0.03), Vector3(0.0, -0.025, 0.46), steel)
+	_box(gun, Vector3(0.042, 0.12, 0.055), Vector3(0.0, -0.09, 0.12), steel).rotation.x = -0.28
+	_add_support_hand(gun, Vector3(-0.005, -0.055, -0.36))
+	_add_muzzle(slot, gun, "auto_shotgun", Vector3(0.0, 0.03, -0.74))
+	_add_grip_hand(gun, Vector3(0.0, -0.105, 0.13))
+
+
 func _new_gun(slot: HandSlot, id: String) -> Node3D:
 	var gun: Node3D = Node3D.new()
 	gun.name = "Gun_%s" % id
@@ -954,6 +1424,16 @@ func _tapered(parent: Node3D, front_radius: float, back_radius: float, length: f
 	var instance: MeshInstance3D = _mesh_instance(parent, mesh, at, material)
 	instance.rotation.x = PI * 0.5
 	return instance
+
+
+## Kugel (Elektrode, Knauf).
+func _ball(parent: Node3D, radius: float, at: Vector3, material: Material) -> MeshInstance3D:
+	var mesh: SphereMesh = SphereMesh.new()
+	mesh.radius = radius
+	mesh.height = radius * 2.0
+	mesh.radial_segments = 12
+	mesh.rings = 6
+	return _mesh_instance(parent, mesh, at, material)
 
 
 func _mesh_instance(parent: Node3D, mesh: Mesh, at: Vector3, material: Material) -> MeshInstance3D:

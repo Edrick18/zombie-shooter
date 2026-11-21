@@ -1,8 +1,8 @@
 extends Node
 ## Modul: Zombies (scripts/game/zombies).
 ## Erzeugt Zombies an den Spawnpunkten des Levels (Marker3D in Gruppe "zombie_spawns" mit
-## Meta "zone" (int) und Meta "active" (bool, fehlt = aktiv)). Die Punkte der Zone 2 schaltet
-## die Tür beim Öffnen frei, vorher erscheint dort niemand.
+## Meta "zone" (int) und Meta "active" (bool, fehlt = aktiv)). Die Punkte eines kaufbaren Raums
+## (Zonen 2 bis 5) schaltet seine Tür beim Öffnen frei, vorher erscheint dort niemand.
 ##
 ## Wahl des Spawnpunkts:
 ## - nie derselbe Punkt zweimal hintereinander (solange es mehr als einen aktiven gibt)
@@ -45,7 +45,7 @@ func spawn(type: String, wave: int) -> Node3D:
 	return zombie
 
 
-## Alle aktiven Spawnpunkte (Zone 2 erst, wenn die Tür offen ist).
+## Alle aktiven Spawnpunkte (die eines Raums erst, wenn seine Tür offen ist).
 func get_active_spawns() -> Array[Marker3D]:
 	var result: Array[Marker3D] = []
 	if not is_inside_tree():

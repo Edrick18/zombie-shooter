@@ -13,12 +13,14 @@ extends Node3D
 ##   ├─ UpgradeEffects  upgrade_effects.gd
 ##   ├─ ChestDropper    chest_dropper.gd
 ##   ├─ WaveManager     wave_manager.gd
+##   ├─ Sfx             sfx.gd (alle Geräusche)
 ##   ├─ Hud             hud.gd (Ebene 1)
 ##   ├─ ChestChoice     chest_choice.gd (Ebene 10)
 ##   ├─ BackpackScreen  backpack_screen.gd (Ebene 15)
 ##   ├─ PauseMenu       pause_menu.gd (Ebene 20)
 ##   ├─ GameOver        game_over.gd (Ebene 30)
-##   └─ CharacterSelect character_select.gd (Ebene 40)
+##   ├─ CharacterSelect character_select.gd (Ebene 40)
+##   └─ UnlockScreen    unlock_screen.gd (Ebene 45, Bildschirm „Programm“)
 ## Vor dem ersten Lauf zeigt main.gd ein Ladebild und wärmt die Shader vor (warmup.gd, nicht
 ## headless), danach wählt der Spieler seinen Kandidaten (character_select.gd, nicht headless).
 ## Zum Schluss ruft main.gd Game.start_run(run_seed). Alle Module sind dann im Baum und haben
@@ -37,9 +39,11 @@ const BackpackScreen := preload("res://scripts/ui/backpack_screen.gd")
 const PauseMenu := preload("res://scripts/ui/pause_menu.gd")
 const GameOver := preload("res://scripts/ui/game_over.gd")
 const CharacterSelect := preload("res://scripts/ui/character_select.gd")
+const UnlockScreen := preload("res://scripts/ui/unlock_screen.gd")
 const Balance := preload("res://scripts/core/balance.gd")
 const Warmup := preload("res://scripts/game/warmup.gd")
 const Settings := preload("res://scripts/game/settings.gd")
+const Sfx := preload("res://scripts/game/audio/sfx.gd")
 
 ## Seed für Game.start_run. -1 = zufällig. Tests setzen ihn vor add_child.
 var run_seed: int = -1
@@ -53,7 +57,7 @@ var warmup_enabled: bool = true
 var character_select_enabled: bool = true
 
 var level_root: Node3D
-## Rückgabe von LevelBuilder.build: player_spawn, nav_region, door.
+## Rückgabe von LevelBuilder.build: player_spawn, nav_region, door, rooms, links (Abschnitt 23.6).
 var level_info: Dictionary = {}
 var zombies_root: Node3D
 var chests_root: Node3D
@@ -63,12 +67,16 @@ var spawner: ZombieSpawner
 var upgrade_effects: UpgradeEffects
 var chest_dropper: ChestDropper
 var wave_manager: WaveManager
+var sfx: Sfx
 var hud: Hud
 var chest_choice: ChestChoice
 var backpack_screen: BackpackScreen
 var pause_menu: PauseMenu
 var game_over: GameOver
 var character_select: CharacterSelect
+## Bildschirm „Programm“ (Abschnitt 22.5): Pakete vom Konto kaufen. Erreichbar über den Knopf in
+## der Kandidatenwahl und im Game Over, er liegt über beiden.
+var unlock_screen: UnlockScreen
 
 
 func _ready() -> void:
@@ -132,6 +140,9 @@ func _build_systems() -> void:
 	wave_manager.name = "WaveManager"
 	wave_manager.spawner = spawner
 	add_child(wave_manager)
+	sfx = Sfx.new()
+	sfx.name = "Sfx"
+	add_child(sfx)
 
 
 func _build_ui() -> void:
@@ -153,6 +164,13 @@ func _build_ui() -> void:
 	character_select = CharacterSelect.new()
 	character_select.name = "CharacterSelect"
 	add_child(character_select)
+	# Das Programm liegt über Kandidatenwahl und Game Over. Beide öffnen es mit ihrem Knopf und
+	# sind nach dem Schließen wieder zu sehen. Es steht zuletzt im Baum: So bekommt es Tasten zuerst.
+	unlock_screen = UnlockScreen.new()
+	unlock_screen.name = "UnlockScreen"
+	add_child(unlock_screen)
+	character_select.unlock_screen = unlock_screen
+	game_over.unlock_screen = unlock_screen
 
 
 ## Neuer Lauf (auch ein zweiter in derselben Szene): Der Spieler steht wieder am Startpunkt und
