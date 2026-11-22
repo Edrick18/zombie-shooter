@@ -1,4 +1,4 @@
-ZOMBIE-SHOOTER – Prototyp v0.2.0
+ZOMBIE-SHOOTER – Prototyp v0.3.0
 ================================
 
 Starten
@@ -11,6 +11,8 @@ klicken.
 
 Der allererste Start dauert ein paar Sekunden länger (Ladebild "Gleich geht's los").
 
+Wer schon v0.2.0 gespielt hat: Konto und freigeschaltete Pakete bleiben erhalten.
+
 
 Worum es geht
 -------------
@@ -20,15 +22,23 @@ deinen Build. Nach jedem Lauf kommen deine Punkte aufs Konto. Damit schaltest du
 "Programm" Pakete frei: Was drin ist, liegt danach in den Kisten.
 
 
-Neu in v0.2.0
+Neu in v0.3.0
 -------------
-- Ton, mit Lautstärke-Regler in den Einstellungen.
-- Das Programm: elf Pakete mit neuen Waffen, Kameras und Gegenständen zum Freischalten.
-- Zehn neue Waffen, darunter Flammenwerfer, Dauerstrahl, Granatwerfer und Armbrust.
-- Fünf Kameras, die für dich kämpfen, und Zubehör, das sie stärker macht.
-- Viele neue Gegenstände: Schild, Minen, Gift, Ausweichsprung und mehr.
-- Größeres Studio mit vier Räumen zum Kaufen. Die Waffen an der Wand gibt es nicht mehr.
-- Späte Wellen sind härter: mehr Zombies, sie kommen schneller und schlagen fester zu.
+- Fundstücke aus Kisten sind erst kaputt. Du reparierst sie mit Material, bevor du sie
+  einräumen oder kombinieren kannst.
+- Material ist eine zweite Währung: Du startest mit etwas, bekommst nach jeder Welle mehr
+  und gewinnst es durch Verschrotten von Gegenständen.
+- Neuer Rucksack-Bildschirm: Ablage als Regal links ohne Grenze, Rucksack groß in der Mitte,
+  Karte mit Werten am Gegenstand. Gleiche Gegenstände lassen sich auch in der Ablage
+  kombinieren.
+- Jeder Gegenstand hat ein eigenes Bild.
+- Zombies als Figuren mit Gesicht, Schritten und verschiedenen Todesarten.
+- Neues Licht mit Schatten und eigener Stimmung je Raum, dazu Mündungsfeuer, Leuchtspuren,
+  Einschläge und Kamera-Wackeln.
+- Musik, Hall und viele neue Geräusche, mit eigenen Reglern für Musik und Geräusche.
+- Neues Rucksack-Teil "Bauchtasche" (ein Feld).
+- Das Spiel läuft in vollen Wellen deutlich flüssiger. Dazu die neue Einstellung
+  "Grafik-Unterbau" (siehe unten).
 
 
 Steuerung
@@ -51,29 +61,45 @@ In der Kistenwahl: Taste 1, 2 oder 3 oder eine Karte anklicken.
 Rucksack
 --------
 - Gegenstände mit der Maus ziehen, mit R oder Rechtsklick drehen.
+- Kaputte Gegenstände sind grau mit einem roten Schild: Die Zahl ist der Preis der Reparatur
+  in Material. Auf "Reparieren" ziehen oder mit der Maus darauf zeigen und F drücken.
+- Was du nicht brauchst: auf "Verschrotten" ziehen (gibt Material) oder auf "Verkaufen"
+  (gibt Punkte). Verschrotten geht auch mit zweimal X.
 - Was als Waffe im Raster liegt, hältst du in der Hand. Du hast zwei Hände:
   eine Zweihand-Waffe oder bis zu zwei Einhand-Waffen.
 - Jede Kamera im Raster fliegt neben dir her und kämpft mit.
 - Sterne zeigen, worauf ein Gegenstand wirkt. Liegt das Richtige auf dem Stern (eine Waffe
   oder eine Kamera, je nach Gegenstand), ist er gefüllt.
 - Zwei gleiche Gegenstände in gleicher Rarität aufeinander ziehen: Es wird einer der nächsten
-  Rarität (Gewöhnlich, Ungewöhnlich, Selten, Episch, Legendär).
+  Rarität (Gewöhnlich, Ungewöhnlich, Selten, Episch, Legendär). Beide müssen heil sein.
 - Rucksack-Teile an den Rand legen: Der Rucksack wird größer.
-- Was du nicht brauchst, auf "Verkaufen" ziehen.
+- N blendet die Namen ein, F1 oder das Fragezeichen zeigt die Hilfe.
 - Munition ist unendlich, nachladen musst du trotzdem.
 
 
-Punkte und Konto
-----------------
+Punkte, Material und Konto
+--------------------------
 - Im Lauf kaufst du mit Punkten Räume. Das kostet dich nichts vom Konto.
+- Material brauchst du nur zum Reparieren. Es gilt für den laufenden Lauf.
 - Am Ende des Laufs kommen alle verdienten Punkte aufs Konto (ohne Verkaufserlöse).
 - Im Programm kaufst du damit Pakete. Am Anfang sind nur wenige Waffen und Gegenstände frei.
 
 
+Wenn es ruckelt: Grafik-Unterbau
+--------------------------------
+Unter Esc, Einstellungen gibt es die Zeile "Grafik-Unterbau":
+- "Sicher" ist der Standard: Das Spiel startet sofort.
+- "Schnell" bringt etwa die doppelte Bildrate. Dafür lädt das Spiel bei jedem Start
+  10 bis 15 Sekunden, und manchmal ruckelt es kurz, wenn etwas zum ersten Mal erscheint.
+Die Wahl gilt erst nach einem Neustart des Spiels.
+"Auflösung 3D" am besten auf 100 % lassen: Mit "Sicher" macht ein kleinerer Wert das Spiel
+langsamer, nicht schneller.
+
+
 Gut zu wissen
 -------------
-- Es ist ein Prototyp: einfache Grafik, Schwierigkeit, Preise und Lautstärken sind noch
+- Es ist ein Prototyp: Schwierigkeit, Preise, Material-Zahlen und Lautstärken sind noch
   nicht abgestimmt.
 - Einstellungen und Spielstand liegen unter %APPDATA%\Godot\app_userdata\Zombie-Shooter
-  (settings.cfg und progress.cfg). Wer von vorn anfangen will, löscht progress.cfg.
+  (settings.cfg, start.cfg und progress.cfg). Wer von vorn anfangen will, löscht progress.cfg.
 - Rückmeldungen sind willkommen: Was macht Spaß, was nervt, was ist zu stark oder zu schwach?
