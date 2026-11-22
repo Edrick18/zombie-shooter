@@ -41,8 +41,15 @@ var character_id: String = CharacterDefs.NONE
 ## Rucksack des Laufs. Wird bei start_run neu angelegt. Wer ihn ändert, ruft danach sync_build().
 var backpack: BackpackState = BackpackState.new()
 ## true: Ein Gegenstand aus der Kiste wird sofort selbst eingeräumt (zusammengelegt, sonst an die
-## erste passende Stelle, sonst verkauft) und der Rucksack öffnet sich nicht. Für Tests und Messungen.
+## erste passende Stelle, sonst bleibt er in der Ablage) und der Rucksack öffnet sich nicht. Für
+## Tests und Messungen. Ein kaputtes Fundstück bleibt dabei in der Ablage (siehe broken_loot).
 var auto_pack: bool = false
+## Material des Laufs (Abschnitt 26): die zweite Währung, zum Reparieren kaputter Fundstücke. Nur
+## lesen, ändern über add_materials, repair_item und scrap_item.
+var materials: int = 0
+## true: Gegenstände aus Kisten kommen kaputt in die Ablage (Rucksack-Teile nie). Ohne Bildschirm
+## (Tests) false, damit die Fundstücke dort gleich benutzbar sind. Bleibt über Läufe erhalten.
+var broken_loot: bool = false
 ## Zufall des Laufs. Module nehmen für Spielzufall diesen Generator (Tests werden so wiederholbar).
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 ## Wird vom Spieler in _ready gesetzt, sonst null. Vor Zugriff is_instance_valid prüfen.
@@ -93,6 +100,8 @@ func _ready() -> void:
 	Events.zombie_killed.connect(_on_zombie_killed)
 	Events.player_died.connect(_on_player_died)
 	Events.wave_started.connect(_on_wave_started)
+	Events.wave_cleared.connect(_on_wave_cleared)
+	broken_loot = DisplayServer.get_name() != "headless"
 	# Fortschritt: Mit Bildschirm aus der Datei, ohne (Tests) nie lesen oder schreiben und alles frei.
 	progress_file_enabled = DisplayServer.get_name() != "headless"
 	if progress_file_enabled:
@@ -107,8 +116,9 @@ func _notification(what: int) -> void:
 		_settle_run()
 
 
-## Beginnt einen Lauf: setzt Punkte, Welle, Kills und Upgrades zurück, State PLAYING, Pause aus,
-## sendet run_started und points_changed. seed_value >= 0 macht den Zufall wiederholbar.
+## Beginnt einen Lauf: setzt Punkte, Material, Welle, Kills und Upgrades zurück, State PLAYING,
+## Pause aus, sendet run_started, points_changed und materials_changed(stand, 0).
+## seed_value >= 0 macht den Zufall wiederholbar.
 ## Game.player bleibt unberührt (der Spieler-Knoten existiert schon).
 func start_run(seed_value: int = -1) -> void:
 	# Ein Lauf, der ohne Game Over verlassen wurde, wird hier noch abgerechnet.
@@ -124,6 +134,7 @@ func start_run(seed_value: int = -1) -> void:
 	_apply_mouse_mode()
 	Events.run_started.emit()
 	Events.points_changed.emit(points)
+	Events.materials_changed.emit(materials, 0)
 
 
 ## Schreibt Punkte gut und wendet den Punkte-Faktor der Upgrades an (kaufmännisch gerundet).
@@ -147,6 +158,67 @@ func spend_points(cost: int) -> bool:
 	return true
 
 
+## Schreibt Material gut und sendet materials_changed(stand, amount). 0 oder weniger ändert nichts.
+func add_materials(amount: int) -> void:
+	if amount <= 0:
+		return
+	materials += amount
+	Events.materials_changed.emit(materials, amount)
+
+
+## Was die Reparatur dieses Gegenstands kostet (Balance.REPAIR_COST nach Rarität). 0, wenn es ihn
+## nicht gibt oder er nicht kaputt ist.
+func repair_cost(uid: int) -> int:
+	if not backpack.is_broken(uid):
+		return 0
+	return Balance.REPAIR_COST[int(backpack.item(uid)["level"]) - 1]
+
+
+## Material, das das Verschrotten dieses Gegenstands bringt (Balance.SCRAP_YIELD nach Rarität, ein
+## Rucksack-Teil Balance.SCRAP_YIELD_BAG), gleich ob er kaputt oder heil ist. 0, wenn es ihn nicht gibt.
+func scrap_value(uid: int) -> int:
+	var entry: Dictionary = backpack.item(uid)
+	if entry.is_empty():
+		return 0
+	if ItemDefs.is_bag(str(entry["id"])):
+		return Balance.SCRAP_YIELD_BAG
+	return Balance.SCRAP_YIELD[int(entry["level"]) - 1]
+
+
+## Lässt sich dieser Gegenstand jetzt reparieren? Er ist kaputt und das Material reicht.
+func can_repair(uid: int) -> bool:
+	return backpack.is_broken(uid) and materials >= repair_cost(uid)
+
+
+## Repariert einen kaputten Gegenstand für repair_cost(uid) Material. Er bleibt in der Ablage
+## liegen und lässt sich danach einräumen und kombinieren. Sendet materials_changed(stand, -kosten)
+## und item_repaired(uid). Kein build_changed: Am Build ändert sich nichts. Gibt false zurück (und
+## ändert nichts), wenn er nicht kaputt ist oder das Material nicht reicht.
+func repair_item(uid: int) -> bool:
+	if not can_repair(uid):
+		return false
+	var cost: int = repair_cost(uid)
+	backpack.repair(uid)
+	materials -= cost
+	Events.materials_changed.emit(materials, -cost)
+	Events.item_repaired.emit(uid)
+	return true
+
+
+## Verschrottet einen Gegenstand aus Rucksack oder Ablage (kaputt oder heil): Er verschwindet, der
+## Build wird abgeglichen (build_changed), dann kommt scrap_value(uid) Material dazu
+## (materials_changed) und item_scrapped(uid, material). Gibt das Material zurück, 0 wenn es ihn
+## nicht gibt.
+func scrap_item(uid: int) -> int:
+	var amount: int = scrap_value(uid)
+	if backpack.remove(uid).is_empty():
+		return 0
+	sync_build()
+	add_materials(amount)
+	Events.item_scrapped.emit(uid, amount)
+	return amount
+
+
 ## Öffnet eine Kiste: würfelt Angebote, pausiert, State CHOOSING, sendet chest_opened.
 ## Wirkt nur im State PLAYING, sonst passiert nichts.
 func open_chest(rarity: int) -> void:
@@ -166,7 +238,8 @@ func open_chest(rarity: int) -> void:
 ## Nimmt das Angebot mit diesem Index (0 bis 2) an.
 ## Gegenstand: Er kommt in die Ablage des Rucksacks, der State wird PACKING (weiter pausiert) und
 ## backpack_opened(uid) wird gesendet. Der Lauf geht mit close_backpack() weiter. Mit auto_pack
-## wird er stattdessen sofort eingeräumt und es geht direkt weiter.
+## wird er stattdessen sofort eingeräumt und es geht direkt weiter. Mit broken_loot kommt er kaputt
+## in die Ablage (Rucksack-Teile nie) und bleibt dort auch mit auto_pack liegen.
 ## Trostpreis: gibt Punkte oder Heilung, danach State PLAYING und Pause aus.
 ## Wirkt nur im State CHOOSING, ein ungültiger Index ändert nichts.
 func choose_offer(index: int) -> void:
@@ -178,7 +251,7 @@ func choose_offer(index: int) -> void:
 	current_offers = []
 	if String(offer.get("kind", "")) == ChestRoller.KIND_ITEM:
 		_levels_at_open = _build_levels()
-		var uid: int = backpack.add_item(String(offer.get("id", "")), int(offer.get("level", 1)))
+		var uid: int = backpack.add_item(String(offer.get("id", "")), int(offer.get("level", 1)), broken_loot)
 		if auto_pack or uid == -1:
 			_auto_pack(uid)
 			state = State.PLAYING
@@ -223,10 +296,10 @@ func open_backpack() -> void:
 
 ## Schließt den Rucksack: State PLAYING, Pause aus. Für jedes Upgrade, das seit dem Öffnen
 ## gestiegen ist, kommt upgrade_chosen, für jede neue Verbindung synergy_unlocked, zum Schluss
-## backpack_closed. Gibt false zurück (und bleibt offen), wenn die Ablage überfüllt ist oder der
-## State nicht PACKING ist.
+## backpack_closed. Gibt false zurück, wenn der State nicht PACKING ist. Die Ablage hat keine
+## Grenze mehr (Abschnitt 26): Wie viel dort liegt, hält den Rucksack nicht offen.
 func close_backpack() -> bool:
-	if state != State.PACKING or backpack.storage_overflow():
+	if state != State.PACKING:
 		return false
 	state = State.PLAYING
 	_set_tree_paused(false)
@@ -356,11 +429,13 @@ func weapon_reload_multiplier(weapon_uid: int) -> float:
 ## Gibt dem Spieler einen Gegenstand außerhalb einer Kiste: Er kommt in die Ablage
 ## und der Rucksack öffnet sich (mit auto_pack räumt er sich selbst ein). Wirkt nur im State
 ## PLAYING. Gibt die uid zurück, -1 wenn es nicht geht. Fragt nicht nach dem Freischalten.
-func grant_item(id: String, level: int = 1) -> int:
+## broken = true: Er kommt kaputt in die Ablage (ein Rucksack-Teil nie). Ohne den Parameter ist er
+## heil, gleich wie broken_loot steht.
+func grant_item(id: String, level: int = 1, broken: bool = false) -> int:
 	if state != State.PLAYING or not ItemDefs.has(id):
 		return -1
 	_levels_at_open = _build_levels()
-	var uid: int = backpack.add_item(id, level)
+	var uid: int = backpack.add_item(id, level, broken)
 	if auto_pack:
 		_auto_pack(uid)
 		_announce_build_changes()
@@ -374,6 +449,7 @@ func grant_item(id: String, level: int = 1) -> int:
 
 ## Verkauft einen Gegenstand aus Rucksack oder Ablage: gibt genau seinen Verkaufswert in Punkten
 ## (ohne Punkte-Faktor) und gleicht den Build ab. Gibt die Punkte zurück, 0 wenn es ihn nicht gibt.
+## Ein kaputter Gegenstand bringt denselben Wert wie ein heiler.
 func sell_item(uid: int) -> int:
 	var entry: Dictionary = backpack.remove(uid)
 	if entry.is_empty():
@@ -387,7 +463,8 @@ func sell_item(uid: int) -> int:
 
 ## Räumt einen Gegenstand aus der Ablage selbst ein: mit einem gleichen Gegenstand gleicher
 ## Rarität kombinieren (und das Ergebnis gleich weiter, solange es einen Partner gibt), sonst an
-## die erste passende Stelle, sonst verkaufen.
+## die erste passende Stelle. Passt er nirgends, ist keine Hand frei oder ist er kaputt, bleibt er
+## in der Ablage (sie hat keine Grenze). Repariert wird hier nichts.
 func _auto_pack(uid: int) -> void:
 	if not backpack.has_item(uid):
 		return
@@ -403,11 +480,6 @@ func _auto_pack(uid: int) -> void:
 		return
 	if backpack.auto_place(uid):
 		sync_build()
-		return
-	# Kein Platz oder keine Hand frei: Der Gegenstand wartet in der Ablage. Ist sie überfüllt,
-	# wird er verkauft.
-	if backpack.storage_overflow():
-		sell_item(uid)
 
 
 ## Meldet, was seit _levels_at_open besser geworden ist: upgrade_chosen je gestiegenem Upgrade
@@ -506,7 +578,8 @@ func _autosave_progress() -> void:
 ##   { "id", "name", "level" } (wirksame Stufen), "synergies": Array[String] mit Synergie-IDs,
 ##   "character": String (Kandidaten-ID, "" = keiner), "items": Array von { "id", "name", "level" }
 ##   (eingeräumte Gegenstände), "cameras": Array von { "id", "name", "level" } (je Kamera-Exemplar),
-##   "bank_gained": int (was dieser Lauf aufs Konto bringt oder gebracht hat), "bank": int (Konto) }.
+##   "bank_gained": int (was dieser Lauf aufs Konto bringt oder gebracht hat), "bank": int (Konto),
+##   "materials": int (Material am Ende des Laufs) }.
 func get_stats() -> Dictionary:
 	var camera_rows: Array[Dictionary] = []
 	for entry: Dictionary in cameras:
@@ -522,6 +595,7 @@ func get_stats() -> Dictionary:
 		"cameras": camera_rows,
 		"bank_gained": last_bank_gain if _run_settled else bank_points_earned,
 		"bank": progress.bank,
+		"materials": materials,
 	}
 
 
@@ -563,6 +637,7 @@ func effect_factor() -> float:
 
 func _reset_state() -> void:
 	points = Balance.POINTS_START + CharacterDefs.start_points(character_id)
+	materials = Balance.MATERIAL_START
 	wave = 0
 	kills = 0
 	total_points_earned = 0
@@ -629,3 +704,10 @@ func _on_player_died() -> void:
 
 func _on_wave_started(wave_number: int, _total_zombies: int) -> void:
 	wave = wave_number
+
+
+## Wellen-Prämie (Abschnitt 26): Material für jede geschaffte Welle, nur in einem laufenden Lauf.
+func _on_wave_cleared(_wave_number: int) -> void:
+	if state == State.MENU or state == State.GAME_OVER:
+		return
+	add_materials(Balance.MATERIAL_PER_WAVE)

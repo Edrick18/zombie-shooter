@@ -12,6 +12,7 @@ const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const UnlockDefs := preload("res://scripts/core/unlock_defs.gd")
 const ProgressState := preload("res://scripts/core/progress_state.gd")
 const CharacterDefs := preload("res://scripts/core/character_defs.gd")
+const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
 const SCREEN_PATH: String = "res://scripts/ui/unlock_screen.gd"
 const STATE_PLAYING: int = 1
@@ -194,8 +195,18 @@ func _test_cards() -> void:
 		var items: Array[String] = UnlockDefs.pack_items(pack_id)
 		for n: int in items.size():
 			_equal(_text(card, "Items/Item_%d" % n), ItemDefs.display_name(items[n]), "Die Karte von %s nennt Teil %d." % [pack_id, n + 1])
-			var dot: ColorRect = card.get_node_or_null("Items/Dot_%d" % n) as ColorRect
-			_check(dot != null and dot.color.is_equal_approx(ItemDefs.color(items[n])), "Teil %d von %s hat das Farbfeld seiner Art." % [n + 1, pack_id])
+			# Vor jedem Teil steht sein kleines Bild aus item_icons.gd (früher ein Farbfeld).
+			var small_icon: Control = card.get_node_or_null("Items/Icon_%d" % n) as Control
+			_check(small_icon is ItemIcons.View and str(small_icon.get("item_id")) == items[n], "Teil %d von %s hat sein kleines Bild." % [n + 1, pack_id])
+			_check(card.get_node_or_null("Items/Dot_%d" % n) == null, "Teil %d von %s hat kein Farbfeld mehr." % [n + 1, pack_id])
+			var item_label: Control = card.get_node("Items/Item_%d" % n) as Control
+			if small_icon != null:
+				_check(is_equal_approx(small_icon.size.x, small_icon.size.y) and small_icon.size.x >= 18.0, "Das kleine Bild von Teil %d in %s ist quadratisch und mindestens 18 Pixel groß." % [n + 1, pack_id])
+				_check(small_icon.position.x >= 0.0 and small_icon.position.x + small_icon.size.x <= item_label.position.x + 0.5, "Das kleine Bild von Teil %d in %s steht vor dem Namen." % [n + 1, pack_id])
+				_check(small_icon.position.y >= item_label.position.y - 0.5 and small_icon.position.y + small_icon.size.y <= item_label.position.y + item_label.size.y + 0.5, "Das kleine Bild von Teil %d in %s bleibt in seiner Zeile." % [n + 1, pack_id])
+				_check(bool(small_icon.get("plate")) and (small_icon.get("plate_color") as Color).is_equal_approx(ItemDefs.color(items[n])), "Das Feld hinter dem kleinen Bild von Teil %d in %s trägt die Farbe seiner Art." % [n + 1, pack_id])
+		var items_box: Control = card.get_node("Items") as Control
+		_check(items_box.position.y + items_box.size.y <= (card.get_node("Price") as Control).position.y + 0.5, "Die Teile von %s enden über dem Preis." % pack_id)
 		_check(card.get_node_or_null("Buy") is Button, "Die Karte von %s hat einen Kaufknopf." % pack_id)
 	_check(_screen.call("card_of", "gibt_es_nicht") == null, "card_of kennt kein unbekanntes Paket.")
 	# Art eines Teils in einfachen Worten.
@@ -335,7 +346,12 @@ func _test_detail() -> void:
 			_equal(_text(block, "Name"), ItemDefs.display_name(items[n]), "Die Tafel nennt den Namen von %s." % items[n])
 			_equal(_text(block, "Kind"), str(_screen.call("kind_text", items[n])), "Die Tafel nennt die Art von %s." % items[n])
 			_equal(_plain(_text(block, "Text")), ItemDefs.description(items[n], 1), "Die Tafel zeigt den Wirkungstext von %s." % items[n])
-			_check(block.get_node_or_null("Icon") != null, "Die Tafel zeigt ein Bild von %s." % items[n])
+			var detail_icon: Control = block.get_node_or_null("Icon") as Control
+			_check(detail_icon is ItemIcons.View and str(detail_icon.get("item_id")) == items[n], "Die Tafel zeigt das Bild von %s aus item_icons.gd." % items[n])
+			if detail_icon != null:
+				_check(is_equal_approx(detail_icon.size.x, detail_icon.size.y) and detail_icon.size.x >= 40.0, "Das Bild von %s in der Tafel ist quadratisch und mindestens 40 Pixel groß." % items[n])
+				_check(detail_icon.position.x + detail_icon.size.x <= (block.get_node("Name") as Control).position.x + 0.5, "Das Bild von %s steht links vom Namen." % items[n])
+				_check(detail_icon.position.y >= 0.0 and detail_icon.position.y + detail_icon.size.y <= (block as Control).size.y + 0.5, "Das Bild von %s bleibt in seinem Block." % items[n])
 		var price: int = UnlockDefs.pack_price(pack_id)
 		var state_text: String = _label("detail_state_label").text
 		var buy_button: Button = _screen.get("buy_button") as Button

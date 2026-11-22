@@ -1,8 +1,8 @@
 extends CanvasLayer
 ## Modul: Oberfläche (scripts/ui).
 ## Game-Over-Bildschirm (Abschnitte 11 und 22.5): erreichte Welle, Kills, Punkte, die Gutschrift
-## des Laufs aufs Konto mit dem neuen Kontostand, dazu der Build (Upgrades und Kameras mit ihrer
-## Rarität, aktive Verbindungen).
+## des Laufs aufs Konto mit dem neuen Kontostand, dazu der Build (Upgrades und Kameras mit ihrem
+## Bild aus item_icons.gd und ihrer Rarität, aktive Verbindungen).
 ## Knöpfe: Neustart -> Game.restart_run(), Programm -> open_program(), Beenden ->
 ## Game.quit_game(). Die Taste R (Aktion "reload") startet ebenfalls neu, die Taste P öffnet das
 ## Programm.
@@ -25,6 +25,7 @@ signal program_requested
 const UiStyle := preload("res://scripts/ui/hud.gd")
 const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
 const UnlockScreen := preload("res://scripts/ui/unlock_screen.gd")
+const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
 const LAYER: int = 30
 
@@ -73,8 +74,9 @@ var points_value_label: Label
 var bank_gain_label: Label
 ## Neuer Kontostand mit Tausenderpunkt.
 var bank_label: Label
-## Behälter der Zeilen des Builds: je Upgrade und je Kameratyp "Row_<id>" (Kinder "Name",
-## "Rarity"; mehrere gleiche Kameras stehen als "2 × Kameradrohne" in einer Zeile), je Synergie
+## Behälter der Zeilen des Builds: je Upgrade und je Kameratyp "Row_<id>" (Kinder "Icon": Bild
+## des Gegenstands als ItemIcons.View, "Name", "Rarity"; mehrere gleiche Kameras stehen als
+## "2 × Kameradrohne" in einer Zeile), je Synergie
 ## "Synergy_<id>", bei zu vielen Einträgen zuletzt das Label "More" ("+3 weitere").
 var upgrade_list: Control
 ## Hinweis, wenn der Lauf ohne Upgrade endete.
@@ -430,6 +432,7 @@ func _fill_build(upgrades: Array, synergies: Array, cameras: Array = []) -> void
 	for n: int in mini(shown_entries, entries.size()):
 		var shown: Dictionary = entries[n]
 		var row: Control = UiStyle.make_upgrade_row(str(shown["id"]), int(shown["level"]), row_size)
+		_use_item_icon(row, str(shown["id"]))
 		var name_label: Label = row.get_node("Name") as Label
 		name_label.text = str(shown["name"])
 		row.position = _slot_position(index, columns, row_size.x, step)
@@ -449,6 +452,29 @@ func _fill_build(upgrades: Array, synergies: Array, cameras: Array = []) -> void
 		more.size = row_size
 		upgrade_list.add_child(more)
 	empty_label.visible = index == 0
+
+
+## Ersetzt das Bild einer Zeile aus UiStyle.make_upgrade_row durch das Bild des Gegenstands aus
+## item_icons.gd (gleicher Name "Icon", gleicher Platz). Ohne Bild für die ID bleibt die Zeile,
+## wie sie ist.
+func _use_item_icon(row: Control, item_id: String) -> void:
+	if not ItemIcons.has(item_id):
+		return
+	var old_icon: Control = row.get_node_or_null("Icon") as Control
+	var icon: ItemIcons.View = ItemIcons.View.new()
+	icon.item_id = item_id
+	var icon_size: float = row.size.y - 8.0
+	var icon_rect: Rect2 = Rect2(Vector2(6.0, 4.0), Vector2(icon_size, icon_size))
+	var index: int = -1
+	if old_icon != null:
+		index = old_icon.get_index()
+		row.remove_child(old_icon)
+		old_icon.free()
+	icon.name = "Icon"
+	UiStyle.anchor_box(icon, Vector2.ZERO, icon_rect.position, icon_rect.size)
+	row.add_child(icon)
+	if index >= 0:
+		row.move_child(icon, index)
 
 
 ## Platz Nummer index in der Liste mit so vielen Spalten (zeilenweise gefüllt). Die Spalten

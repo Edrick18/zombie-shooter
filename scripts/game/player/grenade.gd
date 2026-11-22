@@ -30,12 +30,23 @@ const BODY_LENGTH: float = 0.28
 ## So lange wandert die sichtbare Granate von der Mündung auf die echte Flugbahn (die beginnt am
 ## Auge, damit der Einschlag zum Fadenkreuz passt).
 const MUZZLE_BLEND_TIME: float = 0.18
+## In dieser Zeit wächst die sichtbare Granate auch von diesem Anteil auf ihre volle Größe: Voll
+## groß und leuchtend direkt vor der Kamera verdeckte sie beim Abschuss die Bildmitte.
+const BODY_START_SCALE: float = 0.2
 const TRAIL_COLOR_WHITEN: float = 0.35
 const SPIN_SPEED: float = 14.0
 const GLOW_ENERGY: float = 2.2
 const ROUGHNESS: float = 0.45
+## Schein um die fliegende Granate (Durchmesser in Metern, Deckkraft): So sieht man sie im Bogen.
+## Er geht erst nach HALO_DELAY Sekunden Flug auf und ist nach HALO_GROW weiteren voll da: An der
+## Mündung, direkt vor der Kamera, füllte er sonst das halbe Bild.
+const HALO_SIZE: float = 0.36
+const HALO_ALPHA: float = 0.3
+const HALO_DELAY: float = 0.1
+const HALO_GROW: float = 0.25
 
 static var _body_mesh: CapsuleMesh = null
+static var _halo_mesh: SphereMesh = null
 static var _materials: Dictionary = {}
 
 var _start: Vector3 = Vector3.ZERO
@@ -51,6 +62,7 @@ var _age: float = 0.0
 var _shown_age: float = 0.0
 var _done: bool = false
 var _body: MeshInstance3D = null
+var _halo: MeshInstance3D = null
 var _trail_from: Vector3 = Vector3.ZERO
 
 
@@ -162,6 +174,12 @@ func _show_at(time: float) -> void:
 	var blend: float = clampf(1.0 - time / MUZZLE_BLEND_TIME, 0.0, 1.0)
 	var at: Vector3 = point_at(time) + _muzzle_offset * blend
 	_body.global_position = at
+	# An der Mündung, direkt vor der Kamera, ist die Granate klein und wächst im Flug auf ihre Größe.
+	_body.scale = Vector3.ONE * lerpf(BODY_START_SCALE, 1.0, 1.0 - blend)
+	if is_instance_valid(_halo):
+		var open: float = clampf((time - HALO_DELAY) / HALO_GROW, 0.0, 1.0)
+		_halo.visible = open > 0.0
+		_halo.scale = Vector3.ONE * maxf(open, 0.01)
 	if at.distance_squared_to(_trail_from) > BODY_LENGTH * BODY_LENGTH:
 		Fx.tracer(get_parent(), _trail_from, at, _color.lerp(Color.WHITE, TRAIL_COLOR_WHITEN))
 		_trail_from = at
@@ -184,6 +202,20 @@ func _build_body() -> void:
 	# Die sichtbare Granate bewegt sich unabhängig vom Knoten (der sitzt auf der echten Flugbahn).
 	_body.top_level = true
 	add_child(_body)
+	if _halo_mesh == null:
+		_halo_mesh = SphereMesh.new()
+		_halo_mesh.radius = HALO_SIZE * 0.5
+		_halo_mesh.height = HALO_SIZE
+		_halo_mesh.radial_segments = 10
+		_halo_mesh.rings = 5
+	var halo: MeshInstance3D = MeshInstance3D.new()
+	halo.name = "Halo"
+	halo.mesh = _halo_mesh
+	halo.material_override = Fx.glow_material(Color(_color.r, _color.g, _color.b, HALO_ALPHA))
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	halo.visible = false
+	_body.add_child(halo)
+	_halo = halo
 
 
 ## Leuchtendes Material je Farbe (geteilt, also nie verändern).

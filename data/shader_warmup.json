@@ -67,11 +67,11 @@
 			"usage": 1
 		},
 		{
-			"key": "",
+			"key": "shading_mode=0",
 			"usage": 1
 		},
 		{
-			"key": "shading_mode=0",
+			"key": "",
 			"usage": 1
 		},
 		{
@@ -125,6 +125,10 @@
 		{
 			"key": "blend_mode=1,disable_receive_shadows=1,shading_mode=0,transparency=1,vertex_color_use_as_albedo=1",
 			"usage": 2
+		},
+		{
+			"key": "emission_enabled=1,vertex_color_use_as_albedo=1",
+			"usage": 1
 		}
 	],
 	"version": 1

@@ -17,6 +17,13 @@ extends CharacterBody3D
 ## Eingaben wirken nur im State PLAYING und solange der Spieler lebt. Die Schüsse folgen immer
 ## der Kamera (Fadenkreuz = Bildmitte), auch während Rückstoß und Treffer-Wackeln.
 ##
+## Kamera-Wackeln der Effekte (add_camera_shake): eigene starke Schüsse (SHOT_SHAKE), Explosionen
+## in der Nähe (Stärke nach Abstand) und eigene Treffer (HIT_SHAKE_*) lassen das Bild kurz
+## zittern. Das ist reines Bild: Es klingt in Bruchteilen einer Sekunde ab, und
+## get_aim_direction() rechnet es heraus, die Kugeln fliegen also, als gäbe es das Zittern nicht.
+## Die Stärke allen Wackelns (auch des alten bei Schlägen der Zombies) hängt an der einen
+## Konstante CAMERA_SHAKE_STRENGTH.
+##
 ## Sicherheitsglas (Gegenstand "shield", Architektur 19.2): shield / max_shield. Schaden trifft
 ## zuerst das Schild, nur der Rest das Leben. Nach Balance.SHIELD_RECHARGE_DELAY Sekunden ohne
 ## Schaden lädt es mit SHIELD_RECHARGE_RATE je Sekunde. Signal player_shield_changed.
@@ -65,6 +72,28 @@ const DIP_STIFFNESS: float = 130.0
 const DIP_DAMPING: float = 15.0
 const TRAUMA_DECAY: float = 1.7
 const SHAKE_MAX_ANGLE: float = 0.05
+## Stärke des gesamten Kamera-Wackelns: 1 = wie gebaut, 0 = kein Wackeln. Die eine Stelle zum
+## Abschwächen (gilt für Schläge der Zombies, eigene Schüsse, Explosionen und eigene Treffer).
+const CAMERA_SHAKE_STRENGTH: float = 1.0
+## Wackeln der Effekte: größter Winkel in Radiant bei voller Stärke (gut ein Grad) und wie viel
+## Stärke je Sekunde abklingt (volle Stärke ist nach einer Drittelsekunde weg).
+const FX_SHAKE_MAX_ANGLE: float = 0.02
+const FX_SHAKE_DECAY: float = 3.2
+## Eigene Schüsse: Stärke je Waffe (0 bis 1). Waffen, die hier fehlen, wackeln nicht.
+const SHOT_SHAKE: Dictionary = {
+	"revolver": 0.3, "sawed_off": 0.5, "shotgun": 0.5, "sniper": 0.6, "rocket_launcher": 0.65,
+	"grenade_launcher": 0.45, "auto_shotgun": 0.4, "tesla": 0.3, "crossbow": 0.2,
+	"lmg": 0.12, "minigun": 0.1,
+}
+## Explosion: volle Stärke in ihrer Mitte, null ab dem EXPLOSION_SHAKE_REACH-fachen ihres Radius
+## (mindestens EXPLOSION_SHAKE_MIN_REACH Meter).
+const EXPLOSION_SHAKE: float = 1.0
+const EXPLOSION_SHAKE_REACH: float = 3.0
+const EXPLOSION_SHAKE_MIN_REACH: float = 4.0
+## Eigene Kugeltreffer: normal, Kopftreffer oder kritisch, tödlich.
+const HIT_SHAKE: float = 0.06
+const HIT_SHAKE_STRONG: float = 0.12
+const KILL_SHAKE: float = 0.16
 const HIT_ROLL_PUNCH: float = 0.07
 const HIT_ROLL_RECOVERY: float = 7.0
 ## Ein Sprung der Position über diese Strecke in einem Physikschritt gilt als Versetzen (kein Gleiten).
@@ -122,6 +151,10 @@ var _dip_velocity: float = 0.0
 var _kick: float = 0.0
 var _trauma: float = 0.0
 var _shake_time: float = 0.0
+## Wackeln der Effekte (0 bis 1) und die Drehung der Kamera ohne dieses Wackeln (für die
+## Blickrichtung der Schüsse).
+var _fx_shake: float = 0.0
+var _aim_basis: Basis = Basis.IDENTITY
 var _roll_punch: float = 0.0
 var _roll_sign: float = 1.0
 var _strafe_roll: float = 0.0
@@ -167,6 +200,9 @@ func _ready() -> void:
 	Events.build_changed.connect(refresh_stats)
 	Events.weapon_fired.connect(_on_weapon_fired)
 	Events.wave_cleared.connect(_on_wave_cleared)
+	Events.explosion.connect(_on_explosion)
+	Events.bullet_hit.connect(_on_bullet_hit)
+	Events.zombie_killed.connect(_on_zombie_killed)
 	_prev_position = global_position
 	_cur_position = global_position
 	refresh_stats()
@@ -379,11 +415,28 @@ func get_eye_position() -> Vector3:
 	return _camera.global_position
 
 
-## Blickrichtung der Kamera als Einheitsvektor in Weltkoordinaten.
+## Blickrichtung der Kamera als Einheitsvektor in Weltkoordinaten. Das Wackeln der Effekte
+## (add_camera_shake) zählt nicht mit: Es ist nur Bild und lenkt keinen Schuss ab.
 func get_aim_direction() -> Vector3:
 	if not _camera.is_inside_tree():
 		return Vector3.FORWARD
-	return -_camera.global_transform.basis.z.normalized()
+	if _fx_shake <= 0.0:
+		return -_camera.global_transform.basis.z.normalized()
+	return -(global_transform.basis * _aim_basis).z.normalized()
+
+
+## Lässt die Kamera kurz zittern (reine Optik). amount 0 bis 1: Die Stärke steigt auf diesen
+## Wert, wenn sie darunter liegt, und klingt mit FX_SHAKE_DECAY je Sekunde ab. Mehrere Auslöser
+## addieren sich nicht, das Zittern bleibt also immer klein.
+func add_camera_shake(amount: float) -> void:
+	if is_dead:
+		return
+	_fx_shake = clampf(maxf(_fx_shake, amount), 0.0, 1.0)
+
+
+## Aktuelle Stärke des Wackelns der Effekte (0 = ruhig).
+func get_camera_shake() -> float:
+	return _fx_shake
 
 
 ## Die Kamera des Spielers.
@@ -650,6 +703,27 @@ func _on_weapon_fired(weapon_id: String) -> void:
 	if is_dead:
 		return
 	_kick = minf(_kick + deg_to_rad(float(Balance.CAMERA_RECOIL_KICK_DEG.get(weapon_id, 0.0))), deg_to_rad(Balance.CAMERA_RECOIL_MAX_DEG))
+	add_camera_shake(float(SHOT_SHAKE.get(weapon_id, 0.0)))
+
+
+## Explosion in der Nähe: Die Kamera zittert, je näher desto stärker.
+func _on_explosion(at: Vector3, radius: float) -> void:
+	if is_dead or not is_inside_tree():
+		return
+	var reach: float = maxf(radius * EXPLOSION_SHAKE_REACH, EXPLOSION_SHAKE_MIN_REACH)
+	add_camera_shake(EXPLOSION_SHAKE * clampf(1.0 - get_eye_position().distance_to(at) / reach, 0.0, 1.0))
+
+
+## Eigener Kugeltreffer: ein winziger Ruck, bei Kopftreffer und kritischem Treffer etwas mehr.
+func _on_bullet_hit(_zombie: Node3D, _damage: float, info: Dictionary) -> void:
+	var strong: bool = bool(info.get("headshot", false)) or bool(info.get("crit", false))
+	add_camera_shake(HIT_SHAKE_STRONG if strong else HIT_SHAKE)
+
+
+## Eigene Kugel tötet: etwas mehr Ruck als ein Treffer.
+func _on_zombie_killed(_zombie: Node3D, info: Dictionary) -> void:
+	if String(info.get("source", "")) == "bullet":
+		add_camera_shake(KILL_SHAKE)
 
 
 ## Darf der Spieler gerade steuern? (lebt und der Lauf ist im State PLAYING)
@@ -722,6 +796,7 @@ func _update_feedback(delta: float) -> void:
 	_kick = lerpf(_kick, 0.0, 1.0 - exp(-Balance.CAMERA_RECOIL_RECOVERY * dt))
 	_roll_punch = lerpf(_roll_punch, 0.0, 1.0 - exp(-HIT_ROLL_RECOVERY * dt))
 	_trauma = maxf(0.0, _trauma - TRAUMA_DECAY * dt)
+	_fx_shake = maxf(0.0, _fx_shake - FX_SHAKE_DECAY * dt)
 	_shake_time += dt
 	# Schritte und Seitenneigung aus der Bewegung.
 	var local_velocity: Vector3 = global_transform.basis.inverse() * velocity
@@ -756,15 +831,24 @@ func _apply_camera_transform() -> void:
 	eye.x += cos(_bob_phase) * BOB_WIDTH * _bob_weight
 	eye += _interpolation_offset()
 	_camera.position = eye
-	var shake: float = _trauma * _trauma * SHAKE_MAX_ANGLE
+	var shake: float = _trauma * _trauma * SHAKE_MAX_ANGLE * CAMERA_SHAKE_STRENGTH
 	var shake_pitch: float = shake * sin(_shake_time * 61.0 + 1.3) * sin(_shake_time * 23.0)
 	var shake_yaw: float = shake * sin(_shake_time * 53.0) * sin(_shake_time * 29.0 + 0.7)
 	var shake_roll: float = shake * 0.8 * sin(_shake_time * 47.0 + 2.1)
-	_camera.rotation = Vector3(
+	var turn: Vector3 = Vector3(
 		clampf(_pitch + _kick + shake_pitch, -PITCH_LIMIT, PITCH_LIMIT),
 		shake_yaw,
 		_strafe_roll + _roll_punch + shake_roll
 	)
+	# Bis hierher zählt alles für die Blickrichtung der Schüsse (wie immer). Das Wackeln der
+	# Effekte kommt nur ins Bild.
+	_aim_basis = Basis.from_euler(turn)
+	var fx: float = _fx_shake * FX_SHAKE_MAX_ANGLE * CAMERA_SHAKE_STRENGTH
+	if fx > 0.0:
+		turn.x = clampf(turn.x + fx * sin(_shake_time * 67.0 + 0.9) * cos(_shake_time * 31.0), -PITCH_LIMIT, PITCH_LIMIT)
+		turn.y += fx * sin(_shake_time * 59.0 + 2.3) * cos(_shake_time * 37.0 + 1.1)
+		turn.z += fx * 0.5 * sin(_shake_time * 43.0 + 0.3)
+	_camera.rotation = turn
 
 
 ## Die Physik läuft mit festen Schritten, das Bild meist öfter: Die Kamera gleitet zwischen der
@@ -789,6 +873,7 @@ func _reset_feedback() -> void:
 	_dip_velocity = 0.0
 	_kick = 0.0
 	_trauma = 0.0
+	_fx_shake = 0.0
 	_roll_punch = 0.0
 	_strafe_roll = 0.0
 	_bob_weight = 0.0

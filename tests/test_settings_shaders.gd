@@ -4,6 +4,7 @@ extends SceneTree
 ## Die Datei des Nutzers (user://settings.cfg) wird dabei weder gelesen noch geschrieben.
 
 const TEMP_SETTINGS: String = "user://test_settings_tmp.cfg"
+const TEMP_START: String = "user://test_start_tmp.cfg"
 const TEMP_LIST: String = "user://test_shader_list_tmp.json"
 
 var _failures: int = 0
@@ -72,6 +73,47 @@ func _test_settings_file() -> void:
 	_settings.call("set_mouse_sensitivity", 1.0)
 
 
+## Grafik-Unterbau: Wahl, Begrenzung und die Startdatei, die Godot beim Programmstart selbst liest.
+## Die Startdatei des Nutzers (user://start.cfg) wird dabei weder gelesen noch geschrieben.
+func _test_graphics_driver() -> void:
+	var ids: Array = _settings.get_script_constant_map().get("DRIVER_IDS", [])
+	_check(ids.size() == 2 and str(ids[0]) == "opengl3_angle" and str(ids[1]) == "opengl3", "Zwei Unterbauten: ANGLE (sicher) und OpenGL (schnell).")
+	_check(str(ProjectSettings.get_setting("application/config/project_settings_override", "")) == str(_settings.get_script_constant_map().get("START_PATH", "?")),
+		"project.godot nennt die Startdatei aus den Einstellungen.")
+	_settings.call("reset_to_defaults")
+	_check(int(_settings.get("graphics_driver")) == 0, "Standard: Unterbau Sicher.")
+	_settings.call("set_graphics_driver", 9)
+	_check(int(_settings.get("graphics_driver")) == 1, "Der Unterbau wird auf den letzten Eintrag begrenzt.")
+	_settings.call("set_value", "graphics_driver", 0)
+	_check(int(_settings.call("get_value", "graphics_driver")) == 0, "Der Unterbau lässt sich über seinen Namen setzen und lesen.")
+	var active: int = int(_settings.call("active_driver"))
+	_settings.call("set_graphics_driver", active)
+	_check(not bool(_settings.call("restart_needed")), "Läuft der gewählte Unterbau schon, ist kein Neustart nötig.")
+	_settings.call("set_graphics_driver", 1 - active)
+	_check(bool(_settings.call("restart_needed")), "Ein anderer Unterbau als der laufende braucht einen Neustart.")
+	# Die Startdatei: Abschnitt und Schlüssel so, wie Godot sie als Projekteinstellung liest.
+	_settings.call("set_graphics_driver", 1)
+	_check(bool(_settings.call("save_start_to", TEMP_START)), "save_start_to schreibt die Startdatei.")
+	var config: ConfigFile = ConfigFile.new()
+	_check(config.load(TEMP_START) == OK and str(config.get_value("rendering", "gl_compatibility/driver.windows", "")) == "opengl3",
+		"In der Startdatei steht der Treiber als Projekteinstellung.")
+	_settings.call("set_graphics_driver", 0)
+	_check(bool(_settings.call("load_start_from", TEMP_START)) and int(_settings.get("graphics_driver")) == 1, "load_start_from liest die Wahl zurück.")
+	_check(not bool(_settings.call("load_start_from", "user://gibt_es_nicht.cfg")) and int(_settings.get("graphics_driver")) == 1,
+		"Fehlende Startdatei ändert die Wahl nicht.")
+	config.set_value("rendering", "gl_compatibility/driver.windows", "vulkan")
+	config.save(TEMP_START)
+	_settings.call("load_start_from", TEMP_START)
+	_check(int(_settings.get("graphics_driver")) == 1, "Ein fremder Treibername in der Startdatei ändert die Wahl nicht.")
+	# Die Wahl steht nur in der Startdatei, nicht in settings.cfg.
+	_settings.call("save_to", TEMP_SETTINGS)
+	_settings.call("set_graphics_driver", 0)
+	_settings.call("load_from", TEMP_SETTINGS)
+	_check(int(_settings.get("graphics_driver")) == 0, "settings.cfg enthält den Unterbau nicht.")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(TEMP_START))
+	_settings.call("reset_to_defaults")
+
+
 func _test_video_settings() -> void:
 	_settings.call("reset_to_defaults")
 	_near(float(_settings.get("fov")), 80.0, "Standard-Sichtfeld 80 Grad.")
@@ -95,6 +137,7 @@ func _test_video_settings() -> void:
 	_near(float(_settings.get("render_scale")), 0.5, "Auflösung mindestens 50 Prozent.")
 	_settings.call("set_msaa", 7)
 	_check(int(_settings.get("msaa")) == 3, "Kantenglättung höchstens 8-fach.")
+	_test_graphics_driver()
 	# Alle Werte einmal durch die Datei.
 	_settings.call("set_fov", 95.0)
 	_settings.call("set_window_mode", 1)
@@ -159,6 +202,53 @@ func _test_volume_setting() -> void:
 	_settings.call("reset_to_defaults")
 	_settings.call("apply_audio")
 	_check(not AudioServer.is_bus_mute(0), "Mit dem Standard ist der Master-Bus wieder zu hören.")
+	# Musik und Geräusche: eigene Werte (Standard 0,7 und 1,0), eigene Busse, Abschnitt ton.
+	_near(float(_settings.get("music_volume")), 0.7, "Standard-Lautstärke der Musik 0,7.")
+	_near(float(_settings.get("sfx_volume")), 1.0, "Standard-Lautstärke der Geräusche 1,0.")
+	_settings.call("set_music_volume", 2.0)
+	_near(float(_settings.get("music_volume")), 1.0, "Musik höchstens 1,0.")
+	_settings.call("set_sfx_volume", -1.0)
+	_near(float(_settings.get("sfx_volume")), 0.0, "Geräusche mindestens 0,0.")
+	_settings.call("set_value", "music_volume", 0.42)
+	_settings.call("set_value", "sfx_volume", 0.88)
+	_near(float(_settings.call("get_value", "music_volume")), 0.4, "Musik über den Namen, im Raster von 0,05.")
+	_near(float(_settings.call("get_value", "sfx_volume")), 0.9, "Geräusche über den Namen, im Raster von 0,05.")
+	_check(bool(_settings.call("save_to", TEMP_SETTINGS)), "save_to schreibt Musik und Geräusche.")
+	var audio_file: ConfigFile = ConfigFile.new()
+	audio_file.load(TEMP_SETTINGS)
+	_near(float(audio_file.get_value("ton", "musik", -1.0)), 0.4, "Die Musik steht im Abschnitt ton unter musik.")
+	_near(float(audio_file.get_value("ton", "geraeusche", -1.0)), 0.9, "Die Geräusche stehen im Abschnitt ton unter geraeusche.")
+	_settings.call("reset_to_defaults")
+	_settings.call("load_from", TEMP_SETTINGS)
+	_near(float(_settings.get("music_volume")), 0.4, "Musik kommt aus der Datei zurück.")
+	_near(float(_settings.get("sfx_volume")), 0.9, "Geräusche kommen aus der Datei zurück.")
+	_settings.call("apply_audio")
+	var music_bus: int = AudioServer.get_bus_index("Music")
+	var sfx_bus: int = AudioServer.get_bus_index("Sfx")
+	_check(music_bus != -1 and sfx_bus != -1, "apply_audio legt die Busse Music und Sfx an.")
+	if music_bus != -1 and sfx_bus != -1:
+		_check(absf(AudioServer.get_bus_volume_db(music_bus) - linear_to_db(0.4)) < 0.01, "apply_audio setzt den Bus Music.")
+		_check(absf(AudioServer.get_bus_volume_db(sfx_bus) - linear_to_db(0.9)) < 0.01, "apply_audio setzt den Bus Sfx.")
+		_check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.8)) < 0.01, "Der Master-Bus behält die Gesamtlautstärke.")
+		_settings.call("set_music_volume", 0.0)
+		_settings.call("apply_audio")
+		_check(AudioServer.is_bus_mute(music_bus) and not AudioServer.is_bus_mute(sfx_bus) and not AudioServer.is_bus_mute(0), "Musik 0 schaltet nur den Bus Music stumm.")
+	# Text statt Zahl in der Datei ändert nichts.
+	var broken: ConfigFile = ConfigFile.new()
+	broken.set_value("ton", "musik", "laut")
+	broken.set_value("ton", "geraeusche", true)
+	broken.save(TEMP_SETTINGS)
+	_settings.call("set_music_volume", 0.55)
+	_settings.call("set_sfx_volume", 0.65)
+	_settings.call("load_from", TEMP_SETTINGS)
+	_near(float(_settings.get("music_volume")), 0.55, "Text statt Zahl ändert die Musik nicht.")
+	_near(float(_settings.get("sfx_volume")), 0.65, "Ein Wahrheitswert statt Zahl ändert die Geräusche nicht.")
+	_settings.call("reset_to_defaults")
+	_settings.call("apply_audio")
+	_near(float(_settings.get("music_volume")), 0.7, "reset_to_defaults stellt die Musik zurück.")
+	_near(float(_settings.get("sfx_volume")), 1.0, "reset_to_defaults stellt die Geräusche zurück.")
+	if music_bus != -1:
+		_check(not AudioServer.is_bus_mute(music_bus), "Mit dem Standard ist die Musik wieder zu hören.")
 
 
 func _test_material_keys() -> void:
@@ -317,6 +407,19 @@ func _test_settings_menu() -> void:
 	var labels: Dictionary = settings_menu.get("value_labels")
 	_check(sliders.has("master_volume") and sliders.has("mouse_sensitivity") and sliders.has("fov") and sliders.has("render_scale"),
 		"Vier Regler: Lautstärke, Maus, Sichtfeld, Auflösung.")
+	_check(sliders.has("music_volume") and sliders.has("sfx_volume") and sliders.size() == 6, "Dazu zwei Regler für Musik und Geräusche, zusammen sechs.")
+	if sliders.has("music_volume") and sliders.has("sfx_volume") and labels.has("music_volume") and labels.has("sfx_volume"):
+		var music_slider: HSlider = sliders["music_volume"] as HSlider
+		var sfx_slider: HSlider = sliders["sfx_volume"] as HSlider
+		_near(float(music_slider.value), 70.0, "Der Regler Musik steht anfangs auf 70.")
+		_near(float(sfx_slider.value), 100.0, "Der Regler Geräusche steht anfangs auf 100.")
+		music_slider.value = 20.0
+		sfx_slider.value = 60.0
+		_near(float(_settings.get("music_volume")), 0.2, "Der Regler Musik ändert die Einstellung.")
+		_near(float(_settings.get("sfx_volume")), 0.6, "Der Regler Geräusche ändert die Einstellung.")
+		_check((labels["music_volume"] as Label).text == "20 %" and (labels["sfx_volume"] as Label).text == "60 %", "Die Anzeigen zeigen Musik und Geräusche.")
+		_check(absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Music")) - linear_to_db(0.2)) < 0.01, "Der Regler Musik wirkt sofort auf den Bus Music.")
+		_check(absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Sfx")) - linear_to_db(0.6)) < 0.01, "Der Regler Geräusche wirkt sofort auf den Bus Sfx.")
 	if sliders.has("master_volume") and labels.has("master_volume"):
 		var volume_slider: HSlider = sliders["master_volume"] as HSlider
 		_near(float(volume_slider.value), 80.0, "Der Regler Lautstärke steht anfangs auf 80.")
@@ -326,6 +429,22 @@ func _test_settings_menu() -> void:
 		_check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.35)) < 0.01, "Der Regler Lautstärke wirkt sofort auf den Master-Bus.")
 	_check(cyclers.has("window_mode") and cyclers.has("vsync") and cyclers.has("fps_limit") and cyclers.has("msaa") and cyclers.has("show_fps"),
 		"Fünf Umschalter: Fenster, VSync, Grenze, Kantenglättung, FPS-Anzeige.")
+	_check(cyclers.has("graphics_driver"), "Dazu der Umschalter Grafik-Unterbau.")
+	if cyclers.has("graphics_driver"):
+		var driver_button: Button = cyclers["graphics_driver"] as Button
+		var names: Array = ["Sicher", "Schnell"]
+		var active_driver: int = int(_settings.call("active_driver"))
+		settings_menu.call("set_setting", "graphics_driver", active_driver)
+		settings_menu.call("refresh")
+		_check(driver_button.text == str(names[active_driver]), "Der Knopf nennt den laufenden Unterbau ohne Zusatz, war: " + driver_button.text)
+		driver_button.pressed.emit()
+		_check(int(_settings.get("graphics_driver")) == 1 - active_driver, "Ein Klick wählt den anderen Unterbau.")
+		_check(driver_button.text == str(names[1 - active_driver]) + " (Neustart)", "Der Knopf sagt, dass die Wahl erst nach einem Neustart gilt, war: " + driver_button.text)
+		driver_button.pressed.emit()
+		_check(driver_button.text == str(names[active_driver]), "Zurück auf den laufenden Unterbau: kein Zusatz mehr.")
+		var back_button: Button = settings_menu.get("back_button") as Button
+		var footer_end: float = back_button.offset_top + back_button.custom_minimum_size.y
+		_check(footer_end > 0.0 and footer_end <= 690.0, "Zwölf Zeilen und die Fußzeile passen in die 690 Punkte hohe Ansicht, Ende bei: %.0f" % footer_end)
 	if sliders.has("fov") and cyclers.has("fps_limit") and cyclers.has("show_fps") and cyclers.has("vsync"):
 		(sliders["fov"] as HSlider).value = 100.0
 		_near(float(_settings.get("fov")), 100.0, "Der Regler Sichtfeld ändert die Einstellung.")
@@ -351,6 +470,12 @@ func _test_settings_menu() -> void:
 		_near(float((sliders["fov"] as HSlider).value), 80.0, "Standard stellt auch die Regler zurück.")
 		_near(float(_settings.get("master_volume")), 0.8, "Standard setzt die Lautstärke zurück.")
 		_check(absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.8)) < 0.01, "Standard wirkt auch auf den Master-Bus.")
+		_near(float(_settings.get("music_volume")), 0.7, "Standard setzt die Musik zurück.")
+		_near(float(_settings.get("sfx_volume")), 1.0, "Standard setzt die Geräusche zurück.")
+		if sliders.has("music_volume") and sliders.has("sfx_volume"):
+			_near(float((sliders["music_volume"] as HSlider).value), 70.0, "Standard stellt den Regler Musik zurück.")
+			_near(float((sliders["sfx_volume"] as HSlider).value), 100.0, "Standard stellt den Regler Geräusche zurück.")
+			_check(absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Music")) - linear_to_db(0.7)) < 0.01, "Standard wirkt auch auf den Bus Music.")
 		_check(vsync_button.text == "An" and fps_button.text == "Aus", "Standard stellt auch die Knopftexte zurück.")
 	# Esc führt aus den Einstellungen zurück, erst das zweite Esc setzt das Spiel fort.
 	var escape: InputEventAction = InputEventAction.new()

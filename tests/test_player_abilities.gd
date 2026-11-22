@@ -145,6 +145,18 @@ func _frames(count: int) -> void:
 		await process_frame
 
 
+## Knoten der Druckwelle (Fx.shockwave) direkt unter der Wurzel: Ringe, Wand und Lichtstoß.
+func _shockwave_parts() -> Array[Node]:
+	var parts: Array[Node] = []
+	for child: Node in root.get_children():
+		var node_name: String = String(child.name)
+		if child.is_queued_for_deletion():
+			continue
+		if node_name.contains("Ring") or node_name.contains("Shockwave"):
+			parts.append(child)
+	return parts
+
+
 ## Wartet so viele Physikschritte in normaler Zeit.
 func _ticks(count: int) -> void:
 	for i: int in count:
@@ -597,9 +609,25 @@ func _test_revive() -> void:
 		"Die Druckwelle stößt Zombies im Umkreis mit %s m/s vom Spieler weg, war %s." % [push, front.knockback])
 	_check(outside.knockback == Vector3.ZERO and corpse.knockback == Vector3.ZERO, "Außerhalb von %s m und bei Toten wirkt sie nicht." % radius)
 	_check(is_zero_approx(front.damage_taken) and is_zero_approx(side.damage_taken) and is_zero_approx(Balance.REVIVE_SHOCKWAVE_DAMAGE), "Die Druckwelle macht keinen Schaden.")
+	# Die Druckwelle ist zu sehen: Ringe am Boden und eine Wand, die mitläuft. Nur Bild, ohne Kollision.
+	var wave_parts: Array[Node] = _shockwave_parts()
+	var wave_rings: int = 0
+	var wave_bands: int = 0
+	var wave_colliders: int = 0
+	for part: Node in wave_parts:
+		if String(part.name).contains("Ring"):
+			wave_rings += 1
+		if String(part.name).contains("ShockwaveBand"):
+			wave_bands += 1
+		if part is CollisionObject3D or not part.find_children("*", "CollisionObject3D", true, false).is_empty():
+			wave_colliders += 1
+	# (Godot benennt gleichnamige Geschwister um: Am Namen ist nur der erste Ring zu erkennen.)
+	_check(wave_rings >= 1 and wave_bands == 1 and wave_colliders == 0,
+		"Die Druckwelle ist als Ring mit mitlaufender Wand zu sehen und hat keine Kollision (Ringe %d, Wand %d, mit Kollision %d)." % [wave_rings, wave_bands, wave_colliders])
 	# Unverwundbar für REVIVE_INVULNERABILITY Sekunden.
 	_check(_player.is_invulnerable(), "Nach dem Aufstehen ist der Spieler unverwundbar.")
 	await _idle_until(hit_time + Balance.REVIVE_INVULNERABILITY - 0.2)
+	_check(_shockwave_parts().is_empty() or Balance.REVIVE_INVULNERABILITY < 0.8, "Das Bild der Druckwelle hat sich selbst weggeräumt, übrig: %d." % _shockwave_parts().size())
 	_player.take_damage(50.0)
 	_check(is_equal_approx(_player.hp, revived_hp) and _player.is_invulnerable(), "Kurz vor Ablauf von %s s nimmt er noch keinen Schaden." % Balance.REVIVE_INVULNERABILITY)
 	await _idle_until(hit_time + Balance.REVIVE_INVULNERABILITY + 0.1)

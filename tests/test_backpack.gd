@@ -47,6 +47,7 @@ func _run() -> void:
 	_test_shapes()
 	_test_grid_and_placing()
 	_test_storage_and_remove()
+	_test_broken()
 	_test_merge()
 	_test_bags()
 	_test_hands()
@@ -273,16 +274,80 @@ func _test_storage_and_remove() -> void:
 	_check(not backpack.store(luck), "Was schon in der Ablage liegt, lässt sich nicht noch einmal ablegen.")
 	_check(backpack.upgrade_levels().is_empty() and backpack.storage_items().size() == 1, "In der Ablage wirkt er nicht mehr.")
 	_check(int(backpack.item(luck)["level"]) == 2, "Die Stufe bleibt in der Ablage erhalten.")
-	for _i: int in BackpackState.STORAGE_CAPACITY - 1:
+	# Die Ablage hat keine Grenze (Abschnitt 26).
+	for _i: int in 40:
 		backpack.add_item("lifesteal")
-	_check(not backpack.storage_overflow(), "Fünf Gegenstände passen in die Ablage.")
+	_check(backpack.storage_items().size() == 41, "41 Gegenstände liegen in der Ablage, waren %d." % backpack.storage_items().size())
+	_check(not backpack.storage_overflow(), "Die veraltete Hülle storage_overflow meldet nie einen Überlauf.")
+	_check(BackpackState.STORAGE_CAPACITY > 100000, "Die veraltete Hülle STORAGE_CAPACITY ist so groß, dass sie nie erreicht wird.")
 	var extra: int = backpack.add_item("lifesteal")
-	_check(backpack.storage_overflow(), "Der sechste Gegenstand überfüllt die Ablage.")
 	var removed: Dictionary = backpack.remove(extra)
 	_check(str(removed.get("id", "")) == "lifesteal" and not backpack.has_item(extra), "remove gibt den Gegenstand zurück und löscht ihn.")
 	_check(backpack.remove(9999).is_empty(), "Unbekannte uid: remove gibt nichts zurück.")
-	_check(not backpack.storage_overflow(), "Nach dem Entfernen passt die Ablage wieder.")
+	_check(backpack.storage_items().size() == 41, "Nach dem Entfernen liegen wieder 41 in der Ablage.")
 	_check(backpack.item(9999).is_empty() and backpack.cells_of(9999).is_empty(), "Unbekannte uid ist harmlos.")
+
+
+## Kaputte Gegenstände (Abschnitt 26): Feld broken, Sperre beim Einräumen und Kombinieren, keine
+## Wirkung, Reparatur. Die Regeln mit Material stehen in test_materials.gd.
+func _test_broken() -> void:
+	var backpack: BackpackState = _grid(7, 5)
+	# Das Feld steht in jedem Eintrag.
+	var whole: int = backpack.add_item("luck", 2)
+	var broken: int = backpack.add_item("luck", 2, true)
+	_check(backpack.item(whole).has("broken") and not bool(backpack.item(whole)["broken"]), "Ohne den dritten Parameter ist ein Gegenstand heil.")
+	_check(bool(backpack.item(broken)["broken"]) and backpack.is_broken(broken) and not backpack.is_broken(whole), "Mit broken = true ist er kaputt.")
+	_check(not backpack.is_broken(9999) and not backpack.set_broken(9999, true) and not backpack.repair(9999), "Unbekannte uid ist weder kaputt noch zu reparieren.")
+	var stored: Array[Dictionary] = backpack.storage_items()
+	_check(stored.size() == 2 and not bool(stored[0]["broken"]) and bool(stored[1]["broken"]), "storage_items zeigt das Feld broken.")
+	_check(int(backpack.item(broken)["level"]) == 2 and backpack.highest_level("luck") == 2, "Die Rarität bleibt, auch ein kaputter Gegenstand zählt als Besitz.")
+	# Rucksack-Teile sind nie kaputt.
+	var bag: int = backpack.add_item("bag_small", 1, true)
+	_check(not backpack.is_broken(bag) and not bool(backpack.item(bag)["broken"]), "Ein Rucksack-Teil ist nie kaputt, auch mit broken = true.")
+	_check(not backpack.set_broken(bag, true) and not backpack.is_broken(bag), "set_broken macht ein Rucksack-Teil nicht kaputt.")
+	backpack.remove(bag)
+	# Einräumen ist gesperrt.
+	_check(not backpack.can_place(broken, Vector2i(0, 0), 0) and not backpack.place(broken, Vector2i(0, 0), 0), "can_place und place lehnen einen kaputten Gegenstand ab.")
+	_check(backpack.find_spot(broken).is_empty() and not backpack.auto_place(broken) and not backpack.is_placed(broken), "find_spot und auto_place auch.")
+	backpack.set_rotation(broken, 1)
+	_check(int(backpack.item(broken)["rot"]) == 1, "Drehen in der Ablage geht auch kaputt (nur Anzeige).")
+	# Kombinieren ist in beide Richtungen gesperrt, in der Ablage und mit dem Ziel im Raster.
+	_check(not backpack.can_merge(broken, whole) and not backpack.can_merge(whole, broken), "can_merge ist mit einem Kaputten in beiden Richtungen false.")
+	_check(not backpack.merge(broken, whole) and not backpack.merge(whole, broken), "merge lehnt ab.")
+	_check(backpack.find_storage_merge_partner(whole) == -1 and backpack.find_storage_merge_partner(broken) == -1, "find_storage_merge_partner findet keinen Kaputten und nichts für ihn.")
+	_check(backpack.place(whole, Vector2i(0, 0), 0), "Der heile lässt sich einräumen.")
+	_check(backpack.merge_target(broken, Vector2i(0, 0)) == -1 and backpack.find_merge_partner(broken) == -1, "merge_target und find_merge_partner geben für einen Kaputten nichts.")
+	_check(not backpack.can_merge(broken, whole) and not backpack.can_merge(whole, broken), "Auch mit dem Ziel im Raster nicht.")
+	_check(backpack.has_item(broken) and backpack.has_item(whole) and int(backpack.item(whole)["level"]) == 2, "Beide sind unverändert da.")
+	# In der Ablage wirkt er nicht.
+	_check(backpack.upgrade_levels() == {"luck": 2} and (backpack.global_copies()["luck"] as Array) == [2], "Nur der heile zählt.")
+	# Reparieren.
+	_check(backpack.repair(broken) and not backpack.is_broken(broken) and not bool(backpack.item(broken)["broken"]), "repair macht ihn heil.")
+	_check(not backpack.repair(broken) and not backpack.set_broken(broken, false), "Ein heiler Gegenstand lässt sich nicht noch einmal reparieren.")
+	_check(not backpack.is_placed(broken), "Nach der Reparatur liegt er weiter in der Ablage.")
+	_check(backpack.merge_target(broken, Vector2i(0, 0)) == whole and backpack.can_merge(broken, whole), "Repariert lässt er sich kombinieren.")
+	_check(not backpack.find_spot(broken).is_empty(), "Repariert findet er einen Platz.")
+	_check(backpack.merge(broken, whole) and int(backpack.item(whole)["level"]) == 3 and not bool(backpack.item(whole)["broken"]), "Aus zwei Ungewöhnlichen wird ein heiler Seltener.")
+	# Geht etwas Eingeräumtes kaputt, fällt es in die Ablage und zählt nirgends mehr mit.
+	var build: BackpackState = _grid(7, 5)
+	var pistol: int = build.add_item("pistol", 1)
+	var chain: int = build.add_item("chain_lightning", 3)
+	var drone: int = build.add_item("drone", 2)
+	_check(build.place(pistol, Vector2i(2, 2), 0) and build.place(chain, Vector2i(1, 2), 0) and build.auto_place(drone), "Pistole, Blitz und Kamera einräumen.")
+	_check(build.loadout().size() == 1 and ((build.loadout()[0]["copies"] as Dictionary).get("chain_lightning", []) as Array) == [3], "Der Blitz wirkt über seinen Stern auf die Pistole.")
+	_check(build.cameras().size() == 1 and build.placed_items().size() == 3, "Die Kamera zählt als Exemplar.")
+	for entry: Dictionary in build.placed_items():
+		_check(entry.has("broken") and not bool(entry["broken"]), "placed_items zeigt das Feld broken (%s)." % str(entry["id"]))
+	_check(build.set_broken(chain, true) and not build.is_placed(chain) and build.cells_of(chain).is_empty(), "Ein eingeräumter Gegenstand, der kaputtgeht, liegt danach in der Ablage.")
+	_check((build.loadout()[0]["copies"] as Dictionary).is_empty() and build.mods_of(pistol).is_empty() and build.upgrade_levels().is_empty(), "Sein Stern wirkt nicht mehr auf die Waffe.")
+	_check(not build.is_active(chain) and build.star_cells_of(chain).is_empty(), "Er ist nicht aktiv und hat keine Sternfelder.")
+	_check(build.set_broken(drone, true) and build.cameras().is_empty(), "Eine kaputte Kamera ist kein Exemplar.")
+	_check(build.set_broken(pistol, true) and build.loadout().is_empty() and build.hands_used() == 0, "Eine kaputte Waffe ist nicht in der Hand und braucht keine.")
+	_check(build.placed_items().is_empty() and build.storage_items().size() == 3 and build.free_cell_count() == build.cell_count(), "Alle drei liegen in der Ablage, das Raster ist frei.")
+	_check(build.summary().is_empty() and build.stats() == {"damage": 0.0, "reload": 0.0, "points": 0.0}, "Übersicht und Zusatzwerte sind leer.")
+	_check(build.repair(pistol) and build.place(pistol, Vector2i(2, 2), 0) and build.loadout().size() == 1, "Repariert kommt die Waffe wieder in die Hand.")
+	# remove gibt den Eintrag mit dem Feld zurück (Verkaufen und Verschrotten gehen auch kaputt).
+	_check(bool(build.remove(chain).get("broken", false)) and not build.has_item(chain), "Ein kaputter Gegenstand lässt sich entfernen.")
 
 
 func _test_merge() -> void:
@@ -340,6 +405,32 @@ func _test_merge() -> void:
 	# Kombinieren zweier eingeräumter Gegenstände gibt Platz frei.
 	_check(split.merge(two, one) and split.free_cell_count() == 10, "Kombinieren im Rucksack macht ein Feld frei.")
 	_check(int(split.item(one)["level"]) == 3, "Zwei Ungewöhnliche ergeben einen Seltenen.")
+	# Kombinieren geht auch in der Ablage: Ablage auf Ablage, Raster auf Ablage, Ablage auf Raster.
+	var shelf: BackpackState = BackpackState.new()
+	shelf.setup([Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)] as Array[Vector2i])
+	var stored_a: int = shelf.add_item("luck", 1)
+	var stored_b: int = shelf.add_item("luck", 1)
+	_check(shelf.find_merge_partner(stored_a) == -1, "find_merge_partner sucht weiter nur im Raster.")
+	_check(shelf.find_storage_merge_partner(stored_a) == stored_b, "find_storage_merge_partner findet den Partner in der Ablage.")
+	_check(shelf.can_merge(stored_a, stored_b) and not shelf.can_merge(stored_a, stored_a), "Zwei gleiche in der Ablage lassen sich kombinieren, einer mit sich selbst nicht.")
+	_check(shelf.merge(stored_a, stored_b), "Kombinieren in der Ablage klappt.")
+	_check(not shelf.has_item(stored_a) and int(shelf.item(stored_b)["level"]) == 2 and not bool(shelf.item(stored_b)["placed"]), "Das Ziel steigt um eine Rarität und bleibt in der Ablage.")
+	_check(shelf.storage_items().size() == 1, "Die Ablage hat danach einen Gegenstand weniger.")
+	var placed_c: int = shelf.add_item("luck", 2)
+	_check(shelf.place(placed_c, Vector2i(0, 0), 0) and shelf.can_merge(placed_c, stored_b), "Ein eingeräumter passt zu einem gleichen in der Ablage.")
+	_check(shelf.merge(placed_c, stored_b) and int(shelf.item(stored_b)["level"]) == 3 and shelf.placed_items().is_empty(), "Raster auf Ablage: Das Ergebnis liegt in der Ablage, das Feld ist frei.")
+	var placed_d: int = shelf.add_item("luck", 3)
+	_check(shelf.place(placed_d, Vector2i(0, 0), 0) and shelf.merge(stored_b, placed_d) and int(shelf.item(placed_d)["level"]) == 4 and bool(shelf.item(placed_d)["placed"]), "Ablage auf Raster: Das Ergebnis bleibt im Raster.")
+	var other_level: int = shelf.add_item("luck", 2)
+	var other_item: int = shelf.add_item("burn", 4)
+	_check(not shelf.can_merge(other_level, placed_d) and not shelf.merge(other_level, placed_d), "Verschiedene Raritäten lassen sich auch in der Ablage nicht kombinieren.")
+	_check(not shelf.can_merge(other_item, placed_d), "Verschiedene Gegenstände lassen sich nicht kombinieren.")
+	var top_a: int = shelf.add_item("speed", 5)
+	var top_b: int = shelf.add_item("speed", 5)
+	_check(not shelf.can_merge(top_a, top_b), "Zwei Legendäre lassen sich auch in der Ablage nicht kombinieren.")
+	var bag_a: int = shelf.add_item("bag_small")
+	var bag_b: int = shelf.add_item("bag_small")
+	_check(not shelf.can_merge(bag_a, bag_b), "Rucksack-Teile lassen sich nicht kombinieren.")
 	# Auch aus der Ablage heraus zählt die Rarität für highest_level.
 	var stored: int = split.add_item("burn", 5)
 	_check(split.highest_level("burn") == 5 and not split.is_placed(stored), "highest_level zählt auch die Ablage.")
@@ -920,13 +1011,15 @@ func _test_game_flow() -> void:
 	_check(_opened.size() == 1, "Ein offener Rucksack öffnet sich nicht noch einmal.")
 	_game.call("close_backpack")
 	_check(_chosen.is_empty() and _synergies.is_empty(), "Ohne Änderung gibt es beim Schließen keine Meldung.")
-	# Überfüllte Ablage hält den Rucksack offen.
+	# Die Ablage hat keine Grenze (Abschnitt 26): Auch eine volle Ablage hält den Rucksack nicht offen.
 	_game.call("open_backpack")
 	var extras: Array[int] = []
-	for _i: int in BackpackState.STORAGE_CAPACITY + 1:
+	for _i: int in 12:
 		extras.append(_backpack().add_item("lifesteal"))
-	_check(not bool(_game.call("close_backpack")) and _state() == STATE_PACKING, "Mit überfüllter Ablage bleibt der Rucksack offen.")
-	# Verkaufen gibt Punkte und macht Platz.
+	_check(bool(_game.call("close_backpack")) and _state() == STATE_PLAYING and not paused, "Mit zwölf Gegenständen in der Ablage schließt der Rucksack.")
+	_check(_backpack().storage_items().size() >= 12, "Die Gegenstände liegen weiter in der Ablage.")
+	# Verkaufen gibt Punkte.
+	_game.call("open_backpack")
 	var points_before: int = int(_game.get("points"))
 	_check(int(_game.call("sell_item", extras[0])) == 100, "Ein Gegenstand der Stufe 1 bringt 100 Punkte.")
 	_check(int(_game.get("points")) == points_before + 100, "Die Punkte kommen aufs Konto.")
@@ -1018,12 +1111,22 @@ func _test_game_auto_pack() -> void:
 			_check(false, "auto_pack lässt kein kombinierbares Paar liegen: %s." % pair_key)
 		seen_pairs[pair_key] = true
 	_check(_backpack().cell_count() > 12, "In 40 Kisten kam mindestens ein Rucksack-Teil (Garantie), der Rucksack ist gewachsen.")
-	_check(not _backpack().storage_overflow(), "Mit auto_pack ist die Ablage nie überfüllt.")
 	_check(_backpack().hands_used() <= Balance.PLAYER_HANDS, "Auch mit auto_pack sind höchstens zwei Hände belegt.")
 	_check((_game.get("loadout") as Array).size() >= 1, "Der Spieler hält immer mindestens eine Waffe.")
 	_check(_upgrades().owned_ids().size() >= 3, "Nach 40 Kisten wirken mehrere Upgrades.")
 	_check(_chosen.size() >= 3, "Auch mit auto_pack kommt upgrade_chosen.")
 	_check(_backpack().cell_count() >= 12, "Der Rucksack ist nicht geschrumpft.")
+	# Was nirgends passt, bleibt in der Ablage, gleich wie viel dort liegt (Abschnitt 26: Verkauft
+	# wird nichts mehr). Die Schrotflinte braucht beide Hände, jede weitere Waffe wartet.
+	_game.call("start_run", 9)
+	var points_before: int = int(_game.get("points"))
+	var waiting: Array = [["shotgun", 1], ["pistol", 1], ["pistol", 2], ["pistol", 3], ["pistol", 4], ["revolver", 1], ["revolver", 2], ["revolver", 3]]
+	for pair: Array in waiting:
+		_game.call("open_chest", Balance.RARITY_BRONZE)
+		(_game.get("current_offers") as Array)[0] = {"kind": "item", "id": str(pair[0]), "level": int(pair[1]), "owned_level": 0}
+		_game.call("choose_offer", 0)
+	_check(_backpack().placed_items().size() == 1 and _backpack().storage_items().size() == 7, "Sieben Waffen ohne freie Hand warten in der Ablage, waren %d." % _backpack().storage_items().size())
+	_check(int(_game.get("points")) == points_before and _state() == STATE_PLAYING, "auto_pack verkauft nichts, auch wenn viel in der Ablage liegt.")
 	_game.set("auto_pack", false)
 
 

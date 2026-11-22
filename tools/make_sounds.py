@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Erzeugt alle Geräusche des Spiels als WAV-Dateien (16 Bit, Mono, 44100 Hz) im Ordner audio/.
+"""Erzeugt alle Geräusche des Spiels als WAV-Dateien (16 Bit, Mono, 44100 Hz, das Publikum in
+22050 Hz) im Ordner audio/. Die Musik kommt aus tools/make_music.py.
 
 Aufruf (im Projektordner):
-    python tools/make_sounds.py            alle Dateien neu schreiben und prüfen
-    python tools/make_sounds.py --check    nur die vorhandenen Dateien prüfen
+    python tools/make_sounds.py                  alle Dateien neu schreiben und prüfen
+    python tools/make_sounds.py --check          nur die vorhandenen Dateien prüfen
+    python tools/make_sounds.py --only=hit,land  nur diese Dateien neu schreiben, alle prüfen
 
 Alles wird berechnet (Rauschen, Sinus, Sägezahn, Hüllkurven, einfache Filter), es gibt keine
 fremden Aufnahmen. Der Zufall hat einen festen Startwert: Jeder Lauf schreibt dieselben Dateien.
-Nur die Standardbibliothek von Python 3 wird benutzt.
+Nur die Standardbibliothek von Python 3 wird benutzt. Ein ganzer Lauf dauert je nach Rechner
+zehn Sekunden bis eine Minute.
+
+Häufige Geräusche gibt es in Varianten: Die erste behält den Namen (hit.wav), die weiteren heißen
+hit_2.wav, hit_3.wav. Das Spiel wählt zufällig und nie zweimal dieselbe hintereinander.
+crowd_murmur.wav ist eine Schleife: Sie beginnt und endet nicht bei null, ihr Ende geht ohne
+Sprung in ihren Anfang über, und die Datei trägt den Eintrag "smpl" mit den Schleifenpunkten.
 
 Nach dem Schreiben liest das Skript jede Datei wieder ein und druckt eine Tabelle: Länge,
-Spitzenpegel, mittlerer Pegel, Helligkeit (aus den Nulldurchgängen), übersteuerte Werte, Pegel
-am Rand (erster und letzter Wert) und Gleichanteil.
-Stimmt etwas nicht (zu lang, zu leise, stumm, übersteuert, Knackser am Rand, Gleichanteil), endet
-es mit Code 1.
+Spitzenpegel, mittlerer Pegel, Pegel unter etwa 250 Hz (die Wucht), Helligkeit (aus den
+Nulldurchgängen), übersteuerte Werte, Pegel am Rand (erster und letzter Wert) und Gleichanteil,
+bei einer Schleife den Sprung an der Naht im Vergleich zu den Sprüngen zwischen Nachbarwerten.
+Stimmt etwas nicht (zu lang, zu leise, stumm, übersteuert, Knackser am Rand, Gleichanteil, Sprung
+an der Naht), endet es mit Code 1.
 
 Neue Dateien muss Godot einmal einlesen:
     Godot --headless --import --path <Projekt>
@@ -53,12 +62,17 @@ def noise(duration, rng):
 
 
 def osc(duration, freq, shape="sine", phase=0.0):
-    """Schwingung. freq ist eine Zahl in Hz oder eine Funktion Zeit -> Hz."""
+    """Schwingung. freq ist eine Zahl in Hz, eine Funktion Zeit -> Hz oder eine Liste mit
+    einem Wert je Abtastwert (siehe ramp)."""
     out = []
+    table = isinstance(freq, list)
     moving = callable(freq)
-    step = 0.0 if moving else freq / SAMPLE_RATE
-    for i in range(count(duration)):
-        if moving:
+    step = 0.0 if (moving or table) else freq / SAMPLE_RATE
+    total = min(count(duration), len(freq)) if table else count(duration)
+    for i in range(total):
+        if table:
+            step = freq[i] / SAMPLE_RATE
+        elif moving:
             step = freq(i / SAMPLE_RATE) / SAMPLE_RATE
         phase += step
         x = phase - math.floor(phase)
@@ -88,6 +102,25 @@ def line(points):
                 return v0 + (v1 - v0) * (t - t0) / max(t1 - t0, 1e-9)
         return points[-1][1]
     return value
+
+
+def ramp(points, duration):
+    """Stückweise gerade Kurve durch [(Zeit, Wert), ...] als Liste mit einem Wert je Abtastwert.
+    Viel schneller als line(), wenn die Kurve viele Punkte hat."""
+    n = count(duration)
+    out = [points[-1][1]] * n
+    first = min(n, int(points[0][0] * SAMPLE_RATE))
+    for i in range(first):
+        out[i] = points[0][1]
+    for (t0, v0), (t1, v1) in zip(points, points[1:]):
+        a = max(0, int(t0 * SAMPLE_RATE))
+        b = min(n, int(t1 * SAMPLE_RATE))
+        if b <= a:
+            continue
+        slope = (v1 - v0) / (b - a)
+        for i in range(a, b):
+            out[i] = v0 + slope * (i - a)
+    return out
 
 
 def decay(sig, tau):
@@ -126,21 +159,24 @@ def highpass(sig, cutoff):
 
 def resonant(sig, cutoff, q=1.0, mode="band"):
     """Filter mit Resonanz (Zustandsvariablen-Filter, doppelt abgetastet, damit er stabil bleibt).
-    mode: "low", "band" oder "high". cutoff: Hz oder Funktion Zeit -> Hz."""
+    mode: "low", "band" oder "high". cutoff: Hz, Funktion Zeit -> Hz oder Liste (siehe ramp)."""
     out = []
     low = 0.0
     band = 0.0
     high = 0.0
     damp = 1.0 / max(q, 0.7)
+    table = isinstance(cutoff, list)
     moving = callable(cutoff)
     rate = 2.0 * SAMPLE_RATE
 
     def coefficient(hz):
         return 2.0 * math.sin(math.pi * min(max(hz, 20.0), 9000.0) / rate)
 
-    f = 0.0 if moving else coefficient(cutoff)
+    f = 0.0 if (moving or table) else coefficient(cutoff)
     for i, x in enumerate(sig):
-        if moving:
+        if table:
+            f = coefficient(cutoff[min(i, len(cutoff) - 1)])
+        elif moving:
             f = coefficient(cutoff(i / SAMPLE_RATE))
         for _ in range(2):
             low += f * band
@@ -265,60 +301,90 @@ def click(rng, freqs, tau, noise_tau=0.004, knock=None):
 
 # --- Schüsse --------------------------------------------------------------------------------
 
-def gun(rng, duration, body, crack, tail=None, drive_amount=2.5, body_shape="sine", echo=None):
-    """Schuss aus drei Schichten.
-    body = (Start-Hz, End-Hz, Ausklingzeit, Anteil): der Schlag in der Tiefe.
-    crack = (untere Grenze Hz, obere Grenze Hz, Ausklingzeit, Anteil): der Knall aus Rauschen.
-    tail = (Grenze Hz, Ausklingzeit, Anteil): dumpfer Nachhall. echo = (Abstand s, Anteil)."""
+## Varianten eines Schusses: (Tonhöhe des Schlags, Länge des Knalls, Gewicht der Nachhall-Fahne).
+## Variante 1 ist die Grundform, 2 ist tiefer und voller, 3 höher, knapper und trockener. Dazu hat
+## jede Datei ihr eigenes Rauschen (eigener Zufall je Dateiname).
+VARIANT_TWEAKS = ((1.0, 1.0, 1.0), (0.93, 1.18, 1.25), (1.08, 0.85, 0.80))
+
+
+def gun(rng, duration, body, crack, tail=None, drive_amount=2.5, body_shape="sine", echo=None,
+        variant=0, sub=None, slap=None, bright=6500.0):
+    """Schuss aus Schichten: Schlag, Knall und Nachhall-Fahne.
+    body = (Start-Hz, End-Hz, Ausklingzeit, Anteil): der Schlag, ein kurzer, fallender tiefer Ton.
+    crack = (untere Grenze Hz, obere Grenze Hz, Ausklingzeit, Anteil): der Knall aus Rauschen mit
+    schneller Hüllkurve.
+    tail = (Grenze Hz, Ausklingzeit, Anteil): die Nachhall-Fahne, dumpfes Rauschen, das 8 ms nach
+    dem Knall einsetzt und langsamer ausklingt.
+    sub = (Hz, Ausklingzeit, Anteil): tiefer Stoß unter dem Schlag (nur schwere Waffen).
+    slap = (Abstand s, Anteil): eine frühe, dumpfe Rückwurf-Kopie (Studiowand).
+    echo = (Abstand s, Anteil): spätes Echo (Gewehre). bright: Grenze des letzten Tiefpasses in Hz.
+    variant: 0 bis 2, siehe VARIANT_TWEAKS."""
+    pitch, snap, ring = VARIANT_TWEAKS[variant]
     f0, f1, body_tau, body_level = body
     low, high, crack_tau, crack_level = crack
+    f0 *= pitch
+    f1 *= pitch
+    crack_tau *= snap
     layers = [
         (to_peak(decay(osc(duration, sweep(f0, f1, body_tau * 0.5), body_shape), body_tau)), body_level, 0.0),
         (to_peak(decay(highpass(lowpass(noise(duration, rng), high), low), crack_tau)), crack_level, 0.0),
         (to_peak(decay(highpass(noise(0.004, rng), 4000.0), 0.0015)), 0.5, 0.0),
     ]
+    if sub is not None:
+        sub_hz, sub_tau, sub_level = sub
+        thump = shape_amp(decay(osc(duration, sub_hz * pitch), sub_tau), [(0.0, 0.0), (0.004, 1.0), (duration, 1.0)])
+        layers.append((thump, sub_level, 0.0))
     if tail is not None:
         cut, tail_tau, tail_level = tail
-        layers.append((to_peak(decay(lowpass(noise(duration, rng), cut), tail_tau)), tail_level, 0.0))
+        fan = decay(highpass(lowpass(noise(duration, rng), cut), 180.0), tail_tau * ring)
+        layers.append((to_peak(fan), tail_level * ring, 0.008))
     # Die Sättigung macht das Rauschen oben herum scharf: ein sanfter Tiefpass nimmt das Zischen.
-    sig = lowpass(drive(mix(layers, duration), drive_amount), 5500.0)
+    sig = lowpass(drive(mix(layers, duration), drive_amount), bright)
+    if slap is not None:
+        sig = mix([(sig, 1.0, 0.0), (lowpass(sig, 1800.0), slap[1] * ring, slap[0])], duration)
     if echo is not None:
         sig = mix([(sig, 1.0, 0.0), (lowpass(sig, 2500.0), echo[1], echo[0])], duration)
     return fade(sig, 0.0004, 0.02)
 
 
-def shot_pistol(rng):
-    return gun(rng, 0.20, (260.0, 110.0, 0.040, 0.7), (900.0, 5000.0, 0.030, 2.0), (1500.0, 0.06, 0.6), 2.0)
+def shot_pistol(rng, variant=0):
+    return gun(rng, 0.26, (280.0, 105.0, 0.045, 1.25), (900.0, 5200.0, 0.028, 2.0), (1600.0, 0.07, 0.7), 2.5,
+               variant=variant, slap=(0.045, 0.18))
 
 
 def shot_revolver(rng):
-    return gun(rng, 0.32, (190.0, 70.0, 0.06, 0.8), (600.0, 3800.0, 0.045, 2.2), (1100.0, 0.10, 1.0), 3.0)
+    return gun(rng, 0.34, (200.0, 66.0, 0.065, 1.2), (600.0, 4000.0, 0.045, 2.2), (1100.0, 0.10, 1.1), 3.3,
+               sub=(62.0, 0.05, 0.7), slap=(0.06, 0.22))
 
 
-def shot_smg(rng):
-    return gun(rng, 0.12, (340.0, 160.0, 0.020, 0.9), (1300.0, 6000.0, 0.016, 2.0), (2500.0, 0.03, 0.5), 1.8)
+def shot_smg(rng, variant=0):
+    return gun(rng, 0.17, (330.0, 150.0, 0.026, 1.35), (1300.0, 6200.0, 0.016, 2.0), (2300.0, 0.04, 0.6), 2.2,
+               variant=variant, slap=(0.035, 0.14))
 
 
 def shot_sawed_off(rng):
-    return gun(rng, 0.34, (160.0, 62.0, 0.06, 0.8), (400.0, 4500.0, 0.055, 2.6), (900.0, 0.09, 1.1), 4.0)
+    return gun(rng, 0.36, (165.0, 58.0, 0.065, 1.1), (400.0, 4600.0, 0.055, 2.6), (900.0, 0.10, 1.2), 4.0,
+               sub=(55.0, 0.06, 0.7), slap=(0.07, 0.2))
 
 
 def shot_shotgun(rng):
-    return gun(rng, 0.40, (120.0, 48.0, 0.09, 0.9), (250.0, 3000.0, 0.07, 2.2), (600.0, 0.14, 1.5), 3.5)
+    return gun(rng, 0.40, (125.0, 45.0, 0.09, 1.3), (250.0, 3200.0, 0.07, 2.2), (600.0, 0.13, 1.5), 3.6,
+               sub=(50.0, 0.08, 0.9))
 
 
-def shot_rifle(rng):
-    return gun(rng, 0.24, (230.0, 90.0, 0.035, 0.6), (1200.0, 6000.0, 0.028, 2.2), (1800.0, 0.08, 0.8), 2.5,
-               echo=(0.07, 0.22))
+def shot_rifle(rng, variant=0):
+    return gun(rng, 0.28, (235.0, 88.0, 0.042, 1.15), (1200.0, 6200.0, 0.028, 2.2), (1800.0, 0.08, 0.9), 2.8,
+               echo=(0.07, 0.22), variant=variant)
 
 
 def shot_sniper(rng):
-    return gun(rng, 0.40, (170.0, 55.0, 0.07, 0.8), (1800.0, 8000.0, 0.018, 2.8), (1400.0, 0.16, 1.4), 3.0,
-               echo=(0.11, 0.3))
+    return gun(rng, 0.40, (175.0, 52.0, 0.075, 1.1), (1800.0, 8000.0, 0.018, 2.8), (1400.0, 0.15, 1.4), 3.2,
+               echo=(0.11, 0.3), sub=(48.0, 0.07, 0.7), bright=7500.0)
 
 
-def shot_minigun(rng):
-    return gun(rng, 0.10, (170.0, 120.0, 0.02, 0.6), (800.0, 4500.0, 0.014, 1.8), None, 2.2, "saw")
+def shot_minigun(rng, variant=0):
+    return gun(rng, 0.13, (175.0, 118.0, 0.024, 1.0), (800.0, 4600.0, 0.014, 1.8), (1500.0, 0.03, 0.35), 2.4,
+               "saw", variant=variant)
 
 
 def shot_rocket_launcher(rng):
@@ -350,11 +416,18 @@ def reload_done(rng):
     ], 0.25)
 
 
-def hit(rng):
-    duration = 0.07
-    tick = decay(osc(duration, sweep(900.0, 350.0, 0.012)), 0.014)
-    flesh = decay(highpass(lowpass(noise(duration, rng), 4000.0), 1000.0), 0.009)
-    return fade(mix([(tick, 1.0, 0.0), (to_peak(flesh), 0.6, 0.0)], duration), 0.0003, 0.01)
+def hit(rng, variant=0):
+    """Kugel trifft Zombie: heller Tick, dumpfer Schlag in den Körper, kurzes nasses Schmatzen.
+    Variante 2 ist tiefer und nasser, Variante 3 höher und trockener."""
+    duration = 0.09
+    pitch = (1.0, 0.86, 1.15)[variant]
+    tick = decay(osc(duration, sweep(900.0 * pitch, 350.0 * pitch, 0.012)), 0.014)
+    thud = decay(osc(duration, sweep(210.0 * pitch, 95.0 * pitch, 0.02)), 0.022)
+    flesh = decay(highpass(lowpass(noise(duration, rng), 4000.0), 1000.0), (0.009, 0.012, 0.007)[variant])
+    squelch = resonant(noise(0.05, rng), sweep(2600.0 * pitch, 700.0, 0.015), 2.0)
+    squelch = shape_amp(squelch, [(0.0, 0.0), (0.004, 1.0), (0.05, 0.0)])
+    return fade(mix([(tick, 1.0, 0.0), (thud, 0.7, 0.0), (to_peak(flesh), 0.6, 0.0),
+                     (to_peak(squelch), (0.25, 0.45, 0.15)[variant], 0.006)], duration), 0.0003, 0.01)
 
 
 def headshot(rng):
@@ -416,16 +489,23 @@ def elite_roar(rng):
     return shape_amp(sig, [(0.0, 0.0), (0.07, 1.0), (0.7, 0.85), (duration, 0.0)])
 
 
-def zombie_death(rng):
-    duration = 0.48
-    sig = voice(rng, duration, [(0.0, 165.0), (0.15, 120.0), (duration, 58.0)], (760.0, 1250.0), (320.0, 640.0),
-                34.0, 0.4, 0.8, 2.2)
-    sig = shape_amp(sig, [(0.0, 0.0), (0.02, 1.0), (0.25, 0.6), (duration, 0.0)])
-    splat = decay(lowpass(noise(0.2, rng), 1400.0), 0.035)
+def zombie_death(rng, variant=0):
+    """Zombie stirbt: abfallender Schrei, dumpfes Platschen, Schmatzen. Variante 2 ist ein tieferes,
+    längeres Gurgeln, Variante 3 ein kurzes, hohes Kreischen."""
+    duration = (0.48, 0.56, 0.40)[variant]
+    pitch = (1.0, 0.80, 1.22)[variant]
+    growl_hz, growl_depth, breath = ((34.0, 0.4, 0.8), (24.0, 0.6, 1.0), (41.0, 0.3, 0.6))[variant]
+    form_a, form_b = (((760.0, 1250.0), (320.0, 640.0)), ((620.0, 1050.0), (280.0, 560.0)),
+                      ((880.0, 1500.0), (420.0, 800.0)))[variant]
+    sig = voice(rng, duration, [(0.0, 165.0 * pitch), (0.15, 120.0 * pitch), (duration, 58.0 * pitch)],
+                form_a, form_b, growl_hz, growl_depth, breath, 2.2)
+    sig = shape_amp(sig, [(0.0, 0.0), (0.02, 1.0), (duration * 0.52, 0.6), (duration, 0.0)])
+    splat = decay(lowpass(noise(0.2, rng), 1400.0 * pitch), 0.035)
+    thud = decay(osc(0.12, sweep(150.0 * pitch, 60.0, 0.03)), 0.035)
     squish = resonant(noise(0.25, rng), sweep(2200.0, 300.0, 0.07), 2.5)
     squish = shape_amp(squish, [(0.0, 0.0), (0.02, 1.0), (0.25, 0.0)])
-    return fade(mix([(to_peak(sig), 0.8, 0.0), (to_peak(splat), 0.9, 0.0), (to_peak(squish), 0.5, 0.03)],
-                    duration), 0.0005, 0.03)
+    return fade(mix([(to_peak(sig), 0.8, 0.0), (to_peak(splat), 0.9, 0.0), (thud, 0.5, 0.0),
+                     (to_peak(squish), (0.5, 0.7, 0.35)[variant], 0.03)], duration), 0.0005, 0.03)
 
 
 # --- Spieler --------------------------------------------------------------------------------
@@ -637,17 +717,45 @@ def ui_click(rng):
 
 # --- Effekte --------------------------------------------------------------------------------
 
-def explosion(rng):
+def debris_grains(rng, duration, grains, start=0.12):
+    """Trümmer-Rieseln: viele kurze, helle Körnchen (Rauschen durch eine schmale Resonanz), dicht
+    kurz nach dem Knall und zum Ende hin seltener und leiser."""
+    n = count(duration)
+    out = [0.0] * n
+    for _ in range(grains):
+        at = start + (duration - start - 0.06) * rng.random() ** 1.6
+        length = rng.uniform(0.004, 0.016)
+        grain = decay(resonant(noise(length, rng), rng.uniform(900.0, 5200.0), 4.0), length * 0.35)
+        level = rng.uniform(0.4, 1.0) * (1.0 - at / duration)
+        first = int(at * SAMPLE_RATE)
+        for i, s in enumerate(grain):
+            if first + i < n:
+                out[first + i] += s * level
+    return out
+
+
+def explosion(rng, variant=0):
+    """Explosion: harter Knall, Druckwelle aus Rauschen, deren Klang schnell dumpf wird, ein tiefer
+    Bauch (fallender Sinus mit Oktave, lange Ausklingzeit), Grollen und danach Trümmer-Rieseln.
+    Variante 2 ist tiefer und rollt länger, Variante 3 ist höher und knapper."""
     duration = 0.95
-    blast = lowpass(noise(duration, rng), sweep(3500.0, 120.0, 0.18))
-    blast = decay(blast, 0.28)
-    body = decay(osc(duration, sweep(95.0, 38.0, 0.2)), 0.22)
+    pitch = (1.0, 0.86, 1.14)[variant]
+    blast = lowpass(noise(duration, rng), sweep(3800.0, 140.0, (0.16, 0.21, 0.12)[variant]))
+    blast = decay(blast, (0.26, 0.30, 0.21)[variant])
+    belly_pitch = sweep(88.0 * pitch, 34.0 * pitch, 0.16)
+    belly = [a + 0.45 * b for a, b in zip(osc(duration, belly_pitch),
+                                          osc(duration, lambda t: belly_pitch(t) * 2.0))]
+    belly = decay(shape_amp(belly, [(0.0, 0.0), (0.006, 1.0), (duration, 1.0)]), (0.30, 0.36, 0.24)[variant])
+    punch = decay(osc(0.12, sweep(240.0 * pitch, 70.0, 0.02)), 0.03)
     crack = decay(highpass(noise(0.05, rng), 2000.0), 0.012)
-    debris = lowpass(noise(duration, rng), 320.0)
-    debris = shape_amp(debris, [(0.0, 0.0), (0.1, 1.0), (duration, 0.0)])
-    sig = mix([(to_peak(blast), 2.2, 0.0), (body, 0.9, 0.0), (to_peak(crack), 1.0, 0.0),
-               (to_peak(debris), 0.5, 0.0)], duration)
-    return fade(lowpass(drive(sig, 3.5), 4500.0), 0.0005, 0.1)
+    rumble = lowpass(lowpass(noise(duration, rng), 180.0), 180.0)
+    rumble = shape_amp(rumble, [(0.0, 0.0), (0.08, 1.0), (duration, 0.0)])
+    sig = mix([(to_peak(blast), 2.0, 0.0), (belly, 1.3, 0.0), (punch, 0.8, 0.0), (to_peak(crack), 1.0, 0.0),
+               (to_peak(rumble), 0.6, 0.0)], duration)
+    sig = lowpass(drive(sig, 3.5), 5000.0)
+    # Das Rieseln kommt nach der Sättigung dazu, damit die Körnchen einzeln hörbar bleiben.
+    debris = debris_grains(rng, duration, (30, 38, 22)[variant])
+    return fade(mix([(sig, 1.0, 0.0), (to_peak(debris), 0.17, 0.0)], duration), 0.0005, 0.1)
 
 
 def lightning(rng):
@@ -689,26 +797,33 @@ def half_sine(sig):
     return [s * math.sin(math.pi * i / n) for i, s in enumerate(sig)]
 
 
-def shot_burst_pistol(rng):
+def shot_burst_pistol(rng, variant=0):
     """Dreierpack: knapper, heller Pistolenschuss mit kurzem Klingen des Verschlusses."""
-    duration = 0.15
-    shot = gun(rng, duration, (330.0, 150.0, 0.022, 0.7), (1100.0, 5500.0, 0.020, 2.0), (2000.0, 0.035, 0.4), 2.0)
-    ping = decay(osc(duration, 2350.0, "sine", rng.random()), 0.018)
+    duration = 0.18
+    shot = gun(rng, duration, (330.0, 150.0, 0.026, 1.1), (1100.0, 5500.0, 0.020, 2.0), (2000.0, 0.04, 0.5), 2.2,
+               variant=variant, slap=(0.04, 0.14))
+    ping = decay(osc(duration, 2350.0 * VARIANT_TWEAKS[variant][0], "sine", rng.random()), 0.018)
     return fade(mix([(shot, 1.0, 0.0), (ping, 0.18, 0.004)], duration), 0.0004, 0.02)
 
 
-def shot_nail_gun(rng):
-    """Bühnenbau: Klacken des Schlagbolzens und ein kurzer Stoß Druckluft."""
-    duration = 0.11
-    clack = click(rng, (1750.0, 2900.0, 4100.0), 0.006, noise_tau=0.002, knock=310.0)
-    air = resonant(noise(0.07, rng), 3200.0, 1.2)
+def shot_nail_gun(rng, variant=0):
+    """Bühnenbau: Klacken des Schlagbolzens, ein kurzer Stoß Druckluft und ein dumpfer Rückstoß.
+    Die Varianten klacken etwas tiefer bzw. höher und haben mehr bzw. weniger Luft."""
+    duration = 0.12
+    pitch, _snap, ring = VARIANT_TWEAKS[variant]
+    clack = click(rng, (1750.0 * pitch, 2900.0 * pitch, 4100.0 * pitch), 0.006, noise_tau=0.002, knock=310.0 * pitch)
+    air = resonant(noise(0.07, rng), 3200.0 * pitch, 1.2)
     air = shape_amp(air, [(0.0, 0.0), (0.004, 1.0), (0.025, 0.35), (0.07, 0.0)])
-    return fade(mix([(clack, 1.0, 0.0), (to_peak(air), 0.45, 0.006)], duration), 0.0003, 0.015)
+    kick = decay(osc(0.06, sweep(170.0 * pitch, 80.0, 0.015)), 0.016)
+    return fade(mix([(clack, 1.0, 0.0), (to_peak(air), 0.45 * ring, 0.006), (kick, 0.5, 0.0)], duration),
+                0.0003, 0.015)
 
 
-def shot_machine_pistol(rng):
-    """Werbeblock: sehr kurzer, hoher, dünner Schuss (Rechteck statt Sinus im Schlag, kein Nachhall)."""
-    return gun(rng, 0.10, (430.0, 210.0, 0.013, 0.5), (1700.0, 7000.0, 0.011, 2.2), None, 1.6, "square")
+def shot_machine_pistol(rng, variant=0):
+    """Werbeblock: sehr kurzer, hoher, dünner Schuss (Rechteck statt Sinus im Schlag, nur ein Hauch
+    Nachhall)."""
+    return gun(rng, 0.12, (430.0, 210.0, 0.015, 0.75), (1700.0, 7000.0, 0.011, 2.2), (3000.0, 0.025, 0.3), 1.8,
+               "square", variant=variant, bright=7500.0)
 
 
 def shot_crossbow(rng):
@@ -794,17 +909,20 @@ def shot_tesla(rng):
     return fade(lowpass(sig, 7500.0), 0.0003, 0.03)
 
 
-def shot_lmg(rng):
-    """Marathonsendung: tiefer, satter, kurzer Schlag (tiefer als das Sturmgewehr, ohne Echo)."""
-    return gun(rng, 0.17, (150.0, 62.0, 0.045, 1.0), (650.0, 4000.0, 0.026, 2.2), (950.0, 0.055, 1.0), 3.2)
+def shot_lmg(rng, variant=0):
+    """Marathonsendung: tiefer, satter, kurzer Schlag (tiefer als das Sturmgewehr, ohne Echo) mit
+    einem tiefen Stoß darunter."""
+    return gun(rng, 0.22, (150.0, 60.0, 0.05, 1.1), (650.0, 4200.0, 0.026, 2.2), (950.0, 0.06, 1.1), 3.3,
+               variant=variant, sub=(58.0, 0.045, 0.45))
 
 
-def shot_auto_shotgun(rng):
+def shot_auto_shotgun(rng, variant=0):
     """Zuschauerfrage: Schrotschuss, kürzer als die Flinte, danach klackt der Verschluss."""
     duration = 0.27
-    blast = gun(rng, duration, (140.0, 55.0, 0.06, 0.9), (320.0, 3600.0, 0.045, 2.4), (750.0, 0.07, 1.2), 3.8)
+    blast = gun(rng, duration, (140.0, 55.0, 0.06, 1.0), (320.0, 3600.0, 0.045, 2.4), (750.0, 0.07, 1.2), 3.8,
+                variant=variant, sub=(52.0, 0.05, 0.45))
     clack = click(rng, (1250.0, 2050.0), 0.009, knock=260.0)
-    return fade(mix([(blast, 1.0, 0.0), (clack, 0.22, 0.12)], duration), 0.0004, 0.03)
+    return fade(mix([(blast, 1.0, 0.0), (clack, 0.22, 0.12 * VARIANT_TWEAKS[variant][1])], duration), 0.0004, 0.03)
 
 
 # --- Ausbau 3: Kameras ----------------------------------------------------------------------
@@ -943,102 +1061,464 @@ def thorns(rng):
     return fade(mix([(stab, 1.0, 0.0), (ring, 0.35, 0.0), (to_peak(tick), 0.6, 0.0)], duration), 0.0003, 0.02)
 
 
-# --- Liste aller Geräusche ------------------------------------------------------------------
-# (Dateiname ohne Endung, Funktion, kürzeste Länge, längste Länge in Sekunden)
+# --- Ausbau 4: Schritte, Landen, Herzschlag ---------------------------------------------------
 
-SOUNDS = [
-    ("shot_pistol", shot_pistol, 0.1, 0.4),
-    ("shot_revolver", shot_revolver, 0.1, 0.4),
-    ("shot_smg", shot_smg, 0.1, 0.4),
-    ("shot_sawed_off", shot_sawed_off, 0.1, 0.4),
-    ("shot_shotgun", shot_shotgun, 0.1, 0.4),
-    ("shot_rifle", shot_rifle, 0.1, 0.4),
-    ("shot_sniper", shot_sniper, 0.1, 0.4),
-    ("shot_minigun", shot_minigun, 0.1, 0.4),
-    ("shot_rocket_launcher", shot_rocket_launcher, 0.1, 0.4),
-    ("reload_start", reload_start, 0.05, 1.0),
-    ("reload_done", reload_done, 0.05, 1.0),
-    ("hit", hit, 0.03, 1.0),
-    ("headshot", headshot, 0.05, 1.0),
-    ("zombie_death", zombie_death, 0.05, 1.0),
-    ("zombie_groan_1", zombie_groan_1, 0.05, 1.0),
-    ("zombie_groan_2", zombie_groan_2, 0.05, 1.0),
-    ("zombie_groan_3", zombie_groan_3, 0.05, 1.0),
-    ("elite_roar", elite_roar, 0.05, 1.2),
-    ("player_hurt", player_hurt, 0.05, 1.0),
-    ("shield_hit", shield_hit, 0.05, 1.0),
-    ("shield_recharge", shield_recharge, 0.05, 1.0),
-    ("dash", dash, 0.05, 1.0),
-    ("chest_drop", chest_drop, 0.05, 1.0),
-    ("chest_open", chest_open, 0.05, 1.0),
-    ("card_chosen", card_chosen, 0.05, 1.0),
-    ("upgrade", upgrade, 0.05, 1.0),
-    ("synergy", synergy, 0.05, 2.0),
-    ("backpack_open", backpack_open, 0.05, 1.0),
-    ("backpack_close", backpack_close, 0.05, 1.0),
-    ("item_sold", item_sold, 0.05, 1.0),
-    ("purchase", purchase, 0.05, 1.0),
-    ("wave_start", wave_start, 0.05, 2.0),
-    ("wave_cleared", wave_cleared, 0.05, 2.0),
-    ("countdown_tick", countdown_tick, 0.03, 1.0),
-    ("game_over", game_over, 0.05, 2.0),
-    ("ui_hover", ui_hover, 0.03, 1.0),
-    ("ui_click", ui_click, 0.03, 1.0),
-    ("explosion", explosion, 0.05, 1.0),
-    ("lightning", lightning, 0.05, 1.0),
-    ("drone_shot", drone_shot, 0.05, 1.0),
+def footstep(rng, variant=0):
+    """Schritt auf dem Bühnenboden: dumpfer Tritt der Ferse (fallender tiefer Ton), der hohle Boden
+    schwingt kurz nach, die Sohle klatscht, danach rollt der Fuß leise ab. Vier Varianten mit
+    etwas anderer Tonhöhe, anderem Klatschen und anderem Abrollen."""
+    duration = 0.16
+    pitch = (1.0, 0.91, 1.09, 0.96)[variant]
+    heel = decay(osc(duration, sweep(125.0 * pitch, 62.0 * pitch, 0.02)), 0.022)
+    boards = decay(resonant(noise(duration, rng), 210.0 * pitch, 3.0), 0.03)
+    slap = decay(highpass(lowpass(noise(duration, rng), 2600.0), 700.0), (0.012, 0.010, 0.014, 0.011)[variant])
+    scuff = resonant(noise(0.07, rng), 1900.0 * pitch, 1.2)
+    scuff = shape_amp(scuff, [(0.0, 0.0), (0.015, 1.0), (0.07, 0.0)])
+    sig = mix([(heel, 1.0, 0.0), (to_peak(boards), 0.7, 0.0), (to_peak(slap), 0.5, 0.0),
+               (to_peak(scuff), (0.14, 0.22, 0.10, 0.18)[variant], (0.035, 0.030, 0.040, 0.045)[variant])],
+              duration)
+    return fade(lowpass(sig, 4500.0), 0.0005, 0.03)
+
+
+def land(rng):
+    """Landen nach einem Sprung: beide Füße kurz nacheinander (zwei tiefe Schläge), der Boden
+    dröhnt nach, die Kleidung raschelt."""
+    duration = 0.30
+    layers = []
+    for at, level in ((0.0, 1.0), (0.022, 0.8)):
+        layers.append((decay(osc(0.2, sweep(105.0, 46.0, 0.03)), 0.05), level, at))
+        layers.append((to_peak(decay(highpass(lowpass(noise(0.1, rng), 2200.0), 500.0), 0.014)), 0.45 * level, at))
+    boards = decay(resonant(noise(duration, rng), 150.0, 4.0), 0.07)
+    cloth = shape_amp(lowpass(noise(0.16, rng), 1200.0), [(0.0, 0.0), (0.04, 1.0), (0.16, 0.0)])
+    layers.append((to_peak(boards), 0.8, 0.0))
+    layers.append((to_peak(cloth), 0.18, 0.02))
+    return fade(lowpass(drive(mix(layers, duration), 1.8), 4000.0), 0.0005, 0.05)
+
+
+def heartbeat(rng):
+    """Herzschlag bei wenig Leben: zwei dumpfe Schläge (der zweite höher, kürzer und leiser). Jeder
+    Schlag ist ein fallender tiefer Ton mit zwei Obertönen, damit er auch auf kleinen Lautsprechern
+    zu hören ist, und einem dumpfen Stoß aus Rauschen."""
+    duration = 0.42
+
+    def beat(start_hz, tau, length):
+        pitch = sweep(start_hz, start_hz * 0.6, 0.04)
+        tone = [a + 0.5 * b + 0.2 * c for a, b, c in zip(
+            osc(length, pitch), osc(length, lambda t: pitch(t) * 2.0), osc(length, lambda t: pitch(t) * 3.0))]
+        tone = decay(shape_amp(tone, [(0.0, 0.0), (0.008, 1.0), (length, 1.0)]), tau)
+        puff = decay(lowpass(lowpass(noise(length, rng), 160.0), 160.0), tau)
+        return mix([(tone, 1.0, 0.0), (to_peak(puff), 0.4, 0.0)], length)
+
+    sig = mix([(beat(78.0, 0.05, 0.2), 1.0, 0.0), (beat(92.0, 0.04, 0.2), 0.7, 0.17)], duration)
+    return fade(lowpass(lowpass(sig, 420.0), 420.0), 0.002, 0.05)
+
+
+# --- Ausbau 4: Material, Reparieren, Verschrotten ---------------------------------------------
+
+def item_repaired(rng):
+    """Reparieren: eine Ratsche (sechs Klicks, die schneller und höher werden, darunter ein leises
+    Drehgeräusch), dann rastet etwas ein und ein kurzer heller Ton meldet: fertig."""
+    layers = []
+    at = 0.0
+    step = 0.07
+    for i in range(6):
+        k = 1.0 + 0.04 * i
+        layers.append((click(rng, (2100.0 * k, 3300.0 * k), 0.006, noise_tau=0.002, knock=420.0), 0.7 + 0.05 * i, at))
+        at += step
+        step *= 0.84
+    turn = resonant(noise(0.30, rng), line([(0.0, 1500.0), (0.30, 2600.0)]), 2.0)
+    turn = shape_amp(turn, [(0.0, 0.0), (0.03, 1.0), (0.26, 0.8), (0.30, 0.0)])
+    layers.append((to_peak(turn), 0.10, 0.0))
+    layers.append((click(rng, (900.0, 1500.0), 0.014, knock=180.0), 1.0, at + 0.03))
+    layers.append((bell(0.22, hz("E6"), 0.07), 0.35, at + 0.04))
+    return fade(mix(layers, at + 0.27), 0.0005, 0.04)
+
+
+def item_scrapped(rng):
+    """Verschrotten: Blech wird zerknüllt. Rauschen mit einer zackigen Hüllkurve aus vielen
+    einzelnen Knicken läuft durch fünf schmale Resonanzen (jede mit eigenen Knicken), am Ende
+    fällt das Knäuel dumpf in die Tonne."""
+    duration = 0.55
+    n = count(duration)
+    layers = []
+    for band_hz in (520.0, 1130.0, 1870.0, 2950.0, 4100.0):
+        env = [0.0] * n
+        for _ in range(7):
+            at = 0.36 * rng.random() ** 1.3
+            tau = rng.uniform(0.006, 0.025) * SAMPLE_RATE
+            level = rng.uniform(0.4, 1.0)
+            first = int(at * SAMPLE_RATE)
+            for i in range(min(int(tau * 6.0), n - first)):
+                env[first + i] += level * math.exp(-i / tau)
+        raw = [s * e for s, e in zip(noise(duration, rng), env)]
+        layers.append((to_peak(resonant(raw, band_hz * rng.uniform(0.94, 1.06), 7.0)), 1.0 if band_hz < 2000.0 else 0.7, 0.0))
+    crumple = drive(mix(layers, duration), 2.0)
+    thud = thunk(rng, 0.9)
+    rattle = click(rng, (1400.0, 2250.0, 3600.0), 0.02, knock=None)
+    return fade(mix([(crumple, 1.0, 0.0), (thud, 0.75, 0.38), (rattle, 0.3, 0.40)], duration), 0.0005, 0.04)
+
+
+def material_gain(rng):
+    """Material kommt dazu: drei kleine Metallteile klimpern kurz nacheinander (helle Töne mit
+    unharmonischen Obertönen, sehr kurz)."""
+    layers = []
+    for freq, at, level in ((2400.0, 0.0, 0.8), (3100.0, 0.05, 1.0), (2750.0, 0.095, 0.7)):
+        tone = bell(0.14, freq * rng.uniform(0.97, 1.03), 0.035, partials=((1.0, 1.0), (2.76, 0.5), (5.4, 0.25)))
+        layers.append((tone, level, at))
+        layers.append((decay(highpass(noise(0.008, rng), 5000.0), 0.0015), 0.3 * level, at))
+    return fade(mix(layers, 0.26), 0.0005, 0.03)
+
+
+# --- Ausbau 4: Publikum (22050 Hz) ------------------------------------------------------------
+
+## Vokale als (erste Resonanz, zweite Resonanz) in Hz: a, e, i, o, u, offenes o.
+VOWELS = ((700.0, 1200.0), (500.0, 1700.0), (350.0, 2100.0), (450.0, 850.0), (350.0, 800.0), (600.0, 1000.0))
+
+
+def crowd_voice(rng, duration, pitch_points, first_points, second_points, breath=0.15, vibrato=0.02):
+    """Eine Stimme im Publikum: weicher Sägezahn mit etwas Hauch durch zwei wandernde Resonanzen
+    (Vokal). Die drei Kurven sind Listen [(Zeit, Hz), ...]."""
+    rate = rng.uniform(4.5, 6.5)
+    shift = rng.random()
+    pitch = ramp(pitch_points, duration)
+    freq = [p * (1.0 + vibrato * math.sin(TWO_PI * (rate * i / SAMPLE_RATE + shift))) for i, p in enumerate(pitch)]
+    source = lowpass(osc(duration, freq, "saw", rng.random()), 1800.0)
+    air = lowpass(noise(duration, rng), 3000.0)
+    raw = [s + breath * a for s, a in zip(source, air)]
+    first = resonant(raw, ramp(first_points, duration), 5.0)
+    second = resonant(raw, ramp(second_points, duration), 6.0)
+    return [a + 0.5 * b for a, b in zip(first, second)]
+
+
+def room(sig):
+    """Zwei frühe, dumpfe Rückwürfe: Die Stimmen stehen in einem Saal, nicht am Ohr."""
+    return mix([(sig, 1.0, 0.0), (lowpass(sig, 2000.0), 0.30, 0.06), (lowpass(sig, 1400.0), 0.20, 0.11)], len(sig) / SAMPLE_RATE)
+
+
+def applause(rng, duration, people, density_points):
+    """Klatschen: Jeder Mensch klatscht in seinem eigenen Takt (3,6 bis 5,2 Mal je Sekunde). Die
+    Schläge sind kurze Stöße aus Rauschen in drei Klangfarben (hohle bis flache Hand).
+    density_points: Anteil der Menschen, die gerade klatschen, über die Zeit."""
+    n = count(duration)
+    density = line(density_points)
+    out = [0.0] * n
+    for band_hz in (1000.0, 1500.0, 2300.0):
+        env = [0.0] * n
+        for _ in range(max(1, people // 3)):
+            at = rng.uniform(0.0, 0.3)
+            rate = rng.uniform(3.6, 5.2)
+            level = rng.uniform(0.5, 1.0)
+            tau = rng.uniform(0.006, 0.012) * SAMPLE_RATE
+            while at < duration - 0.05:
+                if rng.random() < density(at):
+                    first = int(at * SAMPLE_RATE)
+                    for i in range(min(int(tau * 5.0), n - first)):
+                        env[first + i] += level * math.exp(-i / tau)
+                at += rng.uniform(0.9, 1.1) / rate
+        band = resonant([s * e for s, e in zip(noise(duration, rng), env)], band_hz * rng.uniform(0.95, 1.05), 1.4)
+        out = [a + b for a, b in zip(out, band)]
+    return highpass(out, 500.0)
+
+
+def crowd_cheer(rng):
+    """Welle geschafft: Das Publikum klatscht (30 Leute, schnell anschwellend, langsam abebbend) und
+    jubelt (neun Stimmen mit steigendem Ton, "jaa" und "wuu"), dazu zwei Pfiffe."""
+    duration = 2.4
+    layers = [(to_peak(applause(rng, duration, 30, [(0.0, 0.5), (0.2, 1.0), (1.2, 0.9), (2.3, 0.15)])), 3.0, 0.0)]
+    for i in range(9):
+        woo = i % 3 == 0
+        base = rng.uniform(300.0, 430.0) if woo else rng.uniform(130.0, 260.0)
+        length = rng.uniform(0.5, 1.0)
+        start = rng.uniform(0.0, 0.55)
+        vowel_a, vowel_b = ((VOWELS[4], VOWELS[3]) if woo else (VOWELS[1], VOWELS[0]))
+        voice_sig = crowd_voice(rng, length, [(0.0, base), (length * 0.3, base * 1.35), (length, base * 1.15)],
+                                [(0.0, vowel_a[0]), (length * 0.3, vowel_b[0]), (length, vowel_b[0])],
+                                [(0.0, vowel_a[1]), (length * 0.3, vowel_b[1]), (length, vowel_b[1])], 0.2, 0.025)
+        voice_sig = shape_amp(voice_sig, [(0.0, 0.0), (0.06, 1.0), (length * 0.6, 0.8), (length, 0.0)])
+        layers.append((to_peak(voice_sig), rng.uniform(0.6, 1.0), start))
+    for start, low, high in ((0.25, 1700.0, 2500.0), (0.9, 2000.0, 2900.0)):
+        pitch = line([(0.0, low), (0.12, high), (0.32, high * 0.97)])
+        whistle = shape_amp(osc(0.32, lambda t, p=pitch: p(t) * (1.0 + 0.012 * math.sin(TWO_PI * 7.0 * t))),
+                            [(0.0, 0.0), (0.03, 1.0), (0.26, 0.8), (0.32, 0.0)])
+        layers.append((whistle, 0.35, start))
+    sig = shape_amp(room(mix(layers, duration)), [(0.0, 1.0), (1.5, 1.0), (duration, 0.0)])
+    return fade(sig, 0.004, 0.2)
+
+
+def crowd_gasp(rng):
+    """Schwerer Treffer am Spieler: Das Publikum zieht scharf die Luft ein und ruft erschrocken
+    "Oh!" (zehn Stimmen, der Ton springt kurz hoch und fällt dann ab)."""
+    duration = 0.75
+    layers = []
+    for i in range(10):
+        base = rng.uniform(105.0, 150.0) if i % 2 == 0 else rng.uniform(200.0, 290.0)
+        length = rng.uniform(0.42, 0.58)
+        start = 0.10 + rng.uniform(0.0, 0.07)
+        voice_sig = crowd_voice(rng, length, [(0.0, base), (0.07, base * 1.18), (length, base * 0.78)],
+                                [(0.0, 560.0 * rng.uniform(0.92, 1.08)), (length, 430.0)],
+                                [(0.0, 920.0 * rng.uniform(0.92, 1.08)), (length, 780.0)], 0.2, 0.01)
+        voice_sig = shape_amp(voice_sig, [(0.0, 0.0), (0.04, 1.0), (length * 0.45, 0.75), (length, 0.0)])
+        layers.append((to_peak(voice_sig), rng.uniform(0.6, 1.0), start))
+    inhale = resonant(noise(0.16, rng), ramp([(0.0, 1100.0), (0.16, 2600.0)], 0.16), 1.5)
+    inhale = shape_amp(inhale, [(0.0, 0.0), (0.10, 1.0), (0.16, 0.0)])
+    layers.append((to_peak(inhale), 1.2, 0.0))
+    return fade(room(mix(layers, duration)), 0.002, 0.08)
+
+
+def crowd_aww(rng):
+    """Game Over: enttäuschtes "Ohhh" (zwölf Stimmen, deren Ton lang abfällt, der Vokal wandert
+    von o nach u), darunter drei tiefe Buh-Rufe."""
+    duration = 1.6
+    layers = []
+    for i in range(12):
+        base = rng.uniform(110.0, 160.0) if i % 2 == 0 else rng.uniform(210.0, 300.0)
+        length = rng.uniform(1.0, 1.4)
+        start = rng.uniform(0.0, 0.15)
+        voice_sig = crowd_voice(rng, length, [(0.0, base * 1.05), (0.12, base), (length, base * 0.70)],
+                                [(0.0, 480.0 * rng.uniform(0.92, 1.08)), (length, 350.0)],
+                                [(0.0, 860.0 * rng.uniform(0.92, 1.08)), (length, 720.0)], 0.15, 0.012)
+        voice_sig = shape_amp(voice_sig, [(0.0, 0.0), (0.08, 1.0), (length * 0.5, 0.8), (length, 0.0)])
+        layers.append((to_peak(voice_sig), rng.uniform(0.6, 1.0), start))
+    for _ in range(3):
+        base = rng.uniform(95.0, 125.0)
+        length = rng.uniform(1.0, 1.3)
+        boo = crowd_voice(rng, length, [(0.0, base), (length, base * 0.9)], [(0.0, 320.0), (length, 300.0)],
+                          [(0.0, 760.0), (length, 700.0)], 0.1, 0.01)
+        boo = shape_amp(boo, [(0.0, 0.0), (0.15, 1.0), (length * 0.7, 0.9), (length, 0.0)])
+        layers.append((to_peak(boo), 0.8, rng.uniform(0.1, 0.3)))
+    return fade(room(mix(layers, duration)), 0.004, 0.15)
+
+
+def loop_blend(sig, overlap):
+    """Macht aus einem Stück eine nahtlose Schleife: Das Ende (overlap Sekunden) wird in den Anfang
+    geblendet (gleiche Leistung, passend für Rauschen und Stimmengewirr) und dann abgeschnitten.
+    Der letzte Wert der Schleife ist der Wert direkt vor dem neuen ersten."""
+    n_over = count(overlap)
+    length = len(sig) - n_over
+    out = list(sig[:length])
+    for i in range(n_over):
+        x = i / n_over
+        out[i] = sig[i] * math.sin(0.5 * math.pi * x) + sig[length + i] * math.cos(0.5 * math.pi * x)
+    return out
+
+
+def crowd_murmur(rng):
+    """Leises Raunen im Studio als Schleife (8 s): zehn Stimmen murmeln durcheinander (Silben mit
+    wechselnden Vokalen, Pausen zum Atmen), weit weg und deshalb dumpf, darunter das Rauschen der
+    Lüftung. Nichts sticht heraus, damit man die Wiederholung nicht hört."""
+    length = 8.0
+    overlap = 1.0
+    total = length + overlap
+    layers = []
+    for i in range(10):
+        base = rng.uniform(95.0, 140.0) if i % 2 == 0 else rng.uniform(180.0, 250.0)
+        at = rng.uniform(0.0, 0.4)
+        amp_points = [(0.0, 0.0)]
+        pitch_points = [(0.0, base)]
+        first_points = [(0.0, 500.0)]
+        second_points = [(0.0, 1300.0)]
+        while at < total:
+            if rng.random() < 0.2:
+                at += rng.uniform(0.25, 0.8)
+                continue
+            syllable = rng.uniform(0.10, 0.24)
+            level = rng.uniform(0.35, 1.0)
+            amp_points += [(at, 0.0), (at + syllable * 0.3, level), (at + syllable * 0.75, level * 0.7),
+                           (at + syllable, 0.0)]
+            vowel = VOWELS[rng.randrange(len(VOWELS))]
+            first_points.append((at + syllable * 0.5, vowel[0] * rng.uniform(0.9, 1.1)))
+            second_points.append((at + syllable * 0.5, vowel[1] * rng.uniform(0.9, 1.1)))
+            pitch_points.append((at + syllable * 0.5, base * rng.uniform(0.85, 1.2)))
+            at += syllable + rng.uniform(0.0, 0.05)
+        voice_sig = crowd_voice(rng, total, pitch_points, first_points, second_points, 0.25, 0.0)
+        amp = ramp(amp_points, total)
+        layers.append((to_peak([s * a for s, a in zip(voice_sig, amp)]), rng.uniform(0.5, 1.0), 0.0))
+    bed = lowpass(lowpass(noise(total, rng), 350.0), 350.0)
+    layers.append((to_peak(bed), 0.5, 0.0))
+    sig = room(lowpass(lowpass(mix(layers, total), 2200.0), 2200.0))
+    return loop_blend(sig[:count(total)], overlap)
+
+
+# --- Liste aller Geräusche ------------------------------------------------------------------
+
+## Abtastrate der Publikums-Geräusche: Sie sind dumpf und weit weg, 22050 Hz reichen.
+CROWD_RATE = 22050
+## So viele Werte vom Anfang einer Schleife stehen noch einmal an ihrem Ende (hinter dem
+## Schleifenende): Der Abspieler findet beim Glätten über die Naht die richtigen Nachbarn.
+LOOP_GUARD = 3
+
+
+def sound(name, build, shortest, longest, rate=44100, loop=False):
+    return {"name": name, "build": build, "shortest": shortest, "longest": longest, "rate": rate, "loop": loop}
+
+
+def with_variants(name, build, shortest, longest, variants):
+    """Ein Geräusch mit Varianten: Die erste behält den Namen, die weiteren heißen name_2, name_3."""
+    rows = [sound(name, lambda rng: build(rng, 0), shortest, longest)]
+    for index in range(1, variants):
+        rows.append(sound("%s_%d" % (name, index + 1), lambda rng, v=index: build(rng, v), shortest, longest))
+    return rows
+
+
+SOUNDS = (
+    with_variants("shot_pistol", shot_pistol, 0.1, 0.4, 3)
+    + [sound("shot_revolver", shot_revolver, 0.1, 0.4)]
+    + with_variants("shot_smg", shot_smg, 0.1, 0.4, 3)
+    + [
+        sound("shot_sawed_off", shot_sawed_off, 0.1, 0.4),
+        sound("shot_shotgun", shot_shotgun, 0.1, 0.4),
+    ]
+    + with_variants("shot_rifle", shot_rifle, 0.1, 0.4, 3)
+    + [sound("shot_sniper", shot_sniper, 0.1, 0.4)]
+    + with_variants("shot_minigun", shot_minigun, 0.1, 0.4, 3)
+    + [
+        sound("shot_rocket_launcher", shot_rocket_launcher, 0.1, 0.4),
+        sound("reload_start", reload_start, 0.05, 1.0),
+        sound("reload_done", reload_done, 0.05, 1.0),
+    ]
+    + with_variants("hit", hit, 0.03, 0.2, 3)
+    + [sound("headshot", headshot, 0.05, 1.0)]
+    + with_variants("zombie_death", zombie_death, 0.05, 1.0, 3)
+    + [
+        sound("zombie_groan_1", zombie_groan_1, 0.05, 1.0),
+        sound("zombie_groan_2", zombie_groan_2, 0.05, 1.0),
+        sound("zombie_groan_3", zombie_groan_3, 0.05, 1.0),
+        sound("elite_roar", elite_roar, 0.05, 1.2),
+        sound("player_hurt", player_hurt, 0.05, 1.0),
+        sound("shield_hit", shield_hit, 0.05, 1.0),
+        sound("shield_recharge", shield_recharge, 0.05, 1.0),
+        sound("dash", dash, 0.05, 1.0),
+        sound("chest_drop", chest_drop, 0.05, 1.0),
+        sound("chest_open", chest_open, 0.05, 1.0),
+        sound("card_chosen", card_chosen, 0.05, 1.0),
+        sound("upgrade", upgrade, 0.05, 1.0),
+        sound("synergy", synergy, 0.05, 2.0),
+        sound("backpack_open", backpack_open, 0.05, 1.0),
+        sound("backpack_close", backpack_close, 0.05, 1.0),
+        sound("item_sold", item_sold, 0.05, 1.0),
+        sound("purchase", purchase, 0.05, 1.0),
+        sound("wave_start", wave_start, 0.05, 2.0),
+        sound("wave_cleared", wave_cleared, 0.05, 2.0),
+        sound("countdown_tick", countdown_tick, 0.03, 1.0),
+        sound("game_over", game_over, 0.05, 2.0),
+        sound("ui_hover", ui_hover, 0.03, 1.0),
+        sound("ui_click", ui_click, 0.03, 1.0),
+    ]
+    + with_variants("explosion", explosion, 0.05, 1.0, 3)
+    + [
+        sound("lightning", lightning, 0.05, 1.0),
+        sound("drone_shot", drone_shot, 0.05, 1.0),
+    ]
     # Ausbau 3: Schüsse der neuen Waffen.
-    ("shot_burst_pistol", shot_burst_pistol, 0.1, 0.4),
-    ("shot_nail_gun", shot_nail_gun, 0.1, 0.4),
-    ("shot_machine_pistol", shot_machine_pistol, 0.1, 0.4),
-    ("shot_crossbow", shot_crossbow, 0.1, 0.4),
-    ("shot_grenade_launcher", shot_grenade_launcher, 0.1, 0.4),
-    ("shot_flamethrower", shot_flamethrower, 0.1, 0.4),
-    ("shot_beam", shot_beam, 0.1, 0.4),
-    ("shot_tesla", shot_tesla, 0.1, 0.4),
-    ("shot_lmg", shot_lmg, 0.1, 0.4),
-    ("shot_auto_shotgun", shot_auto_shotgun, 0.1, 0.4),
-    # Ausbau 3: Kameras (die Drohne behält drone_shot).
-    ("cam_tele", cam_tele, 0.05, 1.0),
-    ("cam_flash", cam_flash, 0.05, 1.0),
-    ("cam_slow", cam_slow, 0.05, 1.0),
-    ("cam_director", cam_director, 0.05, 1.0),
-    # Ausbau 3: Gegenstände und Fortschritt.
-    ("mine_placed", mine_placed, 0.05, 1.0),
-    ("mine_triggered", mine_triggered, 0.05, 1.0),
-    ("player_revived", player_revived, 0.05, 2.0),
-    ("pack_unlocked", pack_unlocked, 0.05, 2.0),
-    ("bank_coins", bank_coins, 0.05, 2.0),
-    ("ricochet", ricochet, 0.05, 1.0),
-    ("thorns", thorns, 0.05, 1.0),
-]
+    + with_variants("shot_burst_pistol", shot_burst_pistol, 0.1, 0.4, 3)
+    + with_variants("shot_nail_gun", shot_nail_gun, 0.1, 0.4, 3)
+    + with_variants("shot_machine_pistol", shot_machine_pistol, 0.1, 0.4, 3)
+    + [
+        sound("shot_crossbow", shot_crossbow, 0.1, 0.4),
+        sound("shot_grenade_launcher", shot_grenade_launcher, 0.1, 0.4),
+        sound("shot_flamethrower", shot_flamethrower, 0.1, 0.4),
+        sound("shot_beam", shot_beam, 0.1, 0.4),
+        sound("shot_tesla", shot_tesla, 0.1, 0.4),
+    ]
+    + with_variants("shot_lmg", shot_lmg, 0.1, 0.4, 3)
+    + with_variants("shot_auto_shotgun", shot_auto_shotgun, 0.1, 0.4, 3)
+    + [
+        # Ausbau 3: Kameras (die Drohne behält drone_shot).
+        sound("cam_tele", cam_tele, 0.05, 1.0),
+        sound("cam_flash", cam_flash, 0.05, 1.0),
+        sound("cam_slow", cam_slow, 0.05, 1.0),
+        sound("cam_director", cam_director, 0.05, 1.0),
+        # Ausbau 3: Gegenstände und Fortschritt.
+        sound("mine_placed", mine_placed, 0.05, 1.0),
+        sound("mine_triggered", mine_triggered, 0.05, 1.0),
+        sound("player_revived", player_revived, 0.05, 2.0),
+        sound("pack_unlocked", pack_unlocked, 0.05, 2.0),
+        sound("bank_coins", bank_coins, 0.05, 2.0),
+        sound("ricochet", ricochet, 0.05, 1.0),
+        sound("thorns", thorns, 0.05, 1.0),
+    ]
+    # Ausbau 4: Schritte (vier Varianten), Landen, Herzschlag.
+    + with_variants("step", footstep, 0.05, 0.3, 4)
+    + [
+        sound("land", land, 0.05, 0.5),
+        sound("heartbeat", heartbeat, 0.05, 0.6),
+        # Ausbau 4: Material.
+        sound("item_repaired", item_repaired, 0.05, 1.0),
+        sound("item_scrapped", item_scrapped, 0.05, 1.0),
+        sound("material_gain", material_gain, 0.05, 0.5),
+        # Ausbau 4: Publikum.
+        sound("crowd_cheer", crowd_cheer, 0.5, 3.0, CROWD_RATE),
+        sound("crowd_gasp", crowd_gasp, 0.2, 1.5, CROWD_RATE),
+        sound("crowd_aww", crowd_aww, 0.5, 3.0, CROWD_RATE),
+        sound("crowd_murmur", crowd_murmur, 4.0, 12.0, CROWD_RATE, True),
+    ]
+)
 
 
 # --- Schreiben und Prüfen -------------------------------------------------------------------
 
-def finish(sig):
-    """Gleichanteil entfernen und auf den Spitzenpegel PEAK_DB bringen."""
+def finish(sig, loop=False):
+    """Gleichanteil entfernen und auf den Spitzenpegel PEAK_DB bringen. Eine Schleife wird an den
+    Rändern nicht geblendet: Ihr Ende geht ohne Pause in ihren Anfang über."""
     mean = sum(sig) / len(sig)
     sig = [s - mean for s in sig]
-    # Der Abzug des Mittelwerts verschiebt die ausgeblendeten Ränder: noch einmal kurz blenden.
-    sig = fade(sig, 0.0003, 0.003)
+    if not loop:
+        # Der Abzug des Mittelwerts verschiebt die ausgeblendeten Ränder: noch einmal kurz blenden.
+        sig = fade(sig, 0.0003, 0.003)
     return to_peak(sig, 10.0 ** (PEAK_DB / 20.0))
 
 
-def write_wav(path, sig):
-    frames = struct.pack("<%dh" % len(sig), *[int(round(max(-1.0, min(1.0, s)) * 32767.0)) for s in sig])
+def write_wav(path, sig, rate=44100, loop=False):
+    """Schreibt 16 Bit Mono. Eine Schleife bekommt LOOP_GUARD Werte vom Anfang noch einmal ans Ende
+    und einen Eintrag "smpl" mit Schleifenanfang 0 und Schleifenende = Länge der Schleife: Godot
+    liest daraus beim Einlesen (Import-Einstellung Loop Mode "Detect From WAV") die Schleife."""
+    values = [int(round(max(-1.0, min(1.0, s)) * 32767.0)) for s in sig]
+    period = len(values)
+    if loop:
+        values += values[:LOOP_GUARD]
+    frames = struct.pack("<%dh" % len(values), *values)
     with wave.open(path, "wb") as out:
         out.setnchannels(1)
         out.setsampwidth(2)
-        out.setframerate(SAMPLE_RATE)
+        out.setframerate(rate)
         out.writeframes(frames)
+    if loop:
+        add_loop_chunk(path, period, rate)
+
+
+def add_loop_chunk(path, period, rate):
+    """Hängt den Eintrag "smpl" an eine fertige WAV-Datei: eine Schleife vorwärts von Wert 0 bis
+    vor Wert period. (Godot spielt die Werte vor dem Schleifenende und springt dann zum Anfang.)"""
+    head = struct.pack("<9I", 0, 0, int(round(1e9 / rate)), 60, 0, 0, 0, 1, 0)
+    one_loop = struct.pack("<6I", 0, 0, 0, period, 0, 0)
+    with open(path, "r+b") as out:
+        out.seek(0, 2)
+        out.write(b"smpl" + struct.pack("<I", len(head) + len(one_loop)) + head + one_loop)
+        size = out.tell()
+        out.seek(4)
+        out.write(struct.pack("<I", size - 8))
+
+
+def read_loop_chunk(path):
+    """Liest (Schleifenanfang, Schleifenende) aus dem Eintrag "smpl", None wenn er fehlt."""
+    with open(path, "rb") as data:
+        raw = data.read()
+    at = 12
+    while at + 8 <= len(raw):
+        name = raw[at:at + 4]
+        size = struct.unpack("<I", raw[at + 4:at + 8])[0]
+        if name == b"smpl" and size >= 60:
+            begin, end = struct.unpack("<2I", raw[at + 8 + 44:at + 8 + 52])
+            return begin, end
+        at += 8 + size + (size & 1)
+    return None
 
 
 def to_db(value):
     return 20.0 * math.log10(max(value, 1e-9))
 
 
-def measure(path):
+def measure(path, loop=False):
     """Liest die Datei wieder ein und misst sie."""
     with wave.open(path, "rb") as data:
         channels = data.getnchannels()
@@ -1048,12 +1528,35 @@ def measure(path):
         raw = data.readframes(frames)
     if channels != 1 or width != 2 or frames == 0:
         return {"ok_format": False, "duration": 0.0, "peak_db": -99.0, "rms_db": -99.0, "clipped": 0,
-                "brightness": 0.0, "rate": rate, "edge_db": 0.0, "dc_db": 0.0}
+                "brightness": 0.0, "rate": rate, "edge_db": 0.0, "dc_db": 0.0, "low_db": -99.0, "seam": 0.0,
+                "loop_ok": False}
     values = struct.unpack("<%dh" % frames, raw)
+    seam = 0.0
+    loop_ok = True
+    if loop:
+        # Die Wächter-Werte am Ende gehören nicht zur Schleife.
+        period = frames - LOOP_GUARD
+        loop_ok = read_loop_chunk(path) == (0, period) and tuple(values[period:]) == tuple(values[:LOOP_GUARD])
+        values = values[:period]
+        frames = period
+        # Sprung an der Naht (letzter Wert -> erster Wert) im Vergleich zum größten Sprung zwischen
+        # Nachbarn in der Nähe: Über 1 heißt, die Naht ist rauer als das Signal selbst.
+        near = max(max(abs(values[i + 1] - values[i]) for i in range(0, 400)),
+                   max(abs(values[i + 1] - values[i]) for i in range(frames - 401, frames - 1)))
+        seam = abs(values[0] - values[-1]) / max(near, 1)
     peak = max(abs(v) for v in values)
     rms = math.sqrt(sum(v * v for v in values) / frames)
     clipped = sum(1 for v in values if abs(v) >= 32767)
     crossings = sum(1 for a, b in zip(values, values[1:]) if (a < 0) != (b < 0))
+    # Anteil unter etwa 250 Hz (zwei einfache Tiefpässe hintereinander): das Maß für die Wucht.
+    a = 1.0 - math.exp(-TWO_PI * 250.0 / rate)
+    y1 = 0.0
+    y2 = 0.0
+    low_sum = 0.0
+    for v in values:
+        y1 += a * (v - y1)
+        y2 += a * (y1 - y2)
+        low_sum += y2 * y2
     return {
         "ok_format": True,
         "duration": frames / rate,
@@ -1067,10 +1570,13 @@ def measure(path):
         "edge_db": to_db(max(abs(values[0]), abs(values[-1])) / 32768.0),
         # Mittelwert aller Werte (Gleichanteil): verschiebt die Membran und knackt ebenfalls.
         "dc_db": to_db(abs(sum(values) / frames) / 32768.0),
+        "low_db": to_db(math.sqrt(low_sum / frames) / 32768.0),
+        "seam": seam,
+        "loop_ok": loop_ok,
     }
 
 
-def problems_of(result, shortest, longest):
+def problems_of(result, shortest, longest, loop=False):
     found = []
     if not result["ok_format"]:
         return ["kein 16-Bit-Mono"]
@@ -1086,7 +1592,13 @@ def problems_of(result, shortest, longest):
         found.append("zu leise oder stumm")
     if result["clipped"] > 0:
         found.append("übersteuert")
-    if result["edge_db"] > EDGE_LIMIT_DB:
+    if loop:
+        # Eine Schleife beginnt und endet nicht bei null: Geprüft wird stattdessen die Naht.
+        if not result["loop_ok"]:
+            found.append("Schleifen-Eintrag oder Wächter-Werte fehlen")
+        if result["seam"] > 1.5:
+            found.append("Sprung an der Naht")
+    elif result["edge_db"] > EDGE_LIMIT_DB:
         found.append("Knackser am Rand")
     if result["dc_db"] > DC_LIMIT_DB:
         found.append("Gleichanteil")
@@ -1094,30 +1606,42 @@ def problems_of(result, shortest, longest):
 
 
 def main():
-    check_only = "--check" in sys.argv[1:]
+    global SAMPLE_RATE
+    args = sys.argv[1:]
+    check_only = "--check" in args
+    only = None
+    for arg in args:
+        if arg.startswith("--only="):
+            only = set(arg[len("--only="):].split(","))
     os.makedirs(OUT_DIR, exist_ok=True)
-    print("%-26s %7s %9s %9s %9s %6s %7s %7s  %s" % (
-        "Datei", "Länge", "Spitze", "Mittel", "Hell", "Über", "Rand", "Gleich", "Urteil"))
-    print("%-26s %7s %9s %9s %9s %6s %7s %7s" % ("", "s", "dBFS", "dBFS", "Hz", "Werte", "dBFS", "dBFS"))
+    print("%-26s %7s %9s %9s %9s %9s %6s %7s %7s  %s" % (
+        "Datei", "Länge", "Spitze", "Mittel", "Tief", "Hell", "Über", "Rand", "Gleich", "Urteil"))
+    print("%-26s %7s %9s %9s %9s %9s %6s %7s %7s" % ("", "s", "dBFS", "dBFS", "dBFS", "Hz", "Werte", "dBFS", "dBFS"))
     failed = 0
-    for name, build, shortest, longest in SOUNDS:
+    for row in SOUNDS:
+        name = row["name"]
         path = os.path.join(OUT_DIR, name + ".wav")
-        if not check_only:
+        if not check_only and (only is None or name in only):
             # Eigener Zufall je Geräusch: Eine Änderung an einem Geräusch lässt die anderen gleich.
             rng = random.Random("%d:%s" % (SEED, name))
-            write_wav(path, finish(build(rng)))
+            SAMPLE_RATE = row["rate"]
+            write_wav(path, finish(row["build"](rng), row["loop"]), row["rate"], row["loop"])
+            SAMPLE_RATE = 44100
         if not os.path.exists(path):
             failed += 1
             print("%-26s %s" % (name + ".wav", "FEHLER: Datei fehlt"))
             continue
-        result = measure(path)
-        found = problems_of(result, shortest, longest)
+        result = measure(path, row["loop"])
+        found = problems_of(result, row["shortest"], row["longest"], row["loop"])
         if found:
             failed += 1
         verdict = "ok" if not found else "FEHLER: " + ", ".join(found)
-        print("%-26s %7.3f %9.2f %9.2f %9.0f %6d %7.0f %7.0f  %s" % (
-            name + ".wav", result["duration"], result["peak_db"], result["rms_db"], result["brightness"],
-            result["clipped"], result["edge_db"], result["dc_db"], verdict))
+        if row["loop"]:
+            verdict += " (Schleife, Naht %.2f)" % result["seam"]
+        print("%-26s %7.3f %9.2f %9.2f %9.2f %9.0f %6d %7.0f %7.0f  %s" % (
+            name + ".wav", result["duration"], result["peak_db"], result["rms_db"], result["low_db"],
+            result["brightness"], result["clipped"], result["edge_db"], result["dc_db"], verdict))
+        sys.stdout.flush()
     print()
     if failed:
         print("%d von %d Dateien haben Fehler." % (failed, len(SOUNDS)))

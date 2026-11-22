@@ -7,6 +7,12 @@ extends Node3D
 ##
 ## Eine frisch gelegte Mine ist ARM_TIME Sekunden lang noch nicht scharf: Sonst ginge eine Mine,
 ## die dem Spieler mitten im Gedränge vor die Füße fällt, im selben Augenblick hoch.
+##
+## Blinklicht: Ist die Mine scharf, blinkt ihr Lämpchen, und mit ihm leuchten ein Schein um das
+## Lämpchen (Halo) und ein Warnring am Boden (Warn) auf. Das sind leuchtende Flächen, kein echtes
+## Licht: Das Level verträgt keine weiteren Lichter.
+
+const Fx := preload("res://scripts/game/fx/fx.gd")
 
 ## Gruppe aller liegenden Minen.
 const GROUP: String = "mines"
@@ -20,6 +26,11 @@ const LAMP_COLOR: Color = Color(1.0, 0.25, 0.1)
 const LAMP_IDLE_COLOR: Color = Color(0.35, 0.3, 0.28)
 const BLINK_TIME: float = 0.5
 const BLINK_ON_SHARE: float = 0.45
+## Schein um das Lämpchen und Warnring am Boden (Durchmesser in Metern, Farben mit Deckkraft).
+const HALO_SIZE: float = 0.34
+const HALO_COLOR: Color = Color(1.0, 0.3, 0.12, 0.55)
+const WARN_SIZE: float = 0.95
+const WARN_COLOR: Color = Color(1.0, 0.3, 0.12, 0.5)
 
 # Netze und Materialien gibt es einmal für alle Minen.
 static var _base_mesh: CylinderMesh = null
@@ -28,6 +39,8 @@ static var _fuse_mesh: CylinderMesh = null
 static var _lamp_mesh: SphereMesh = null
 static var _lamp_on: StandardMaterial3D = null
 static var _lamp_off: StandardMaterial3D = null
+static var _halo_mesh: SphereMesh = null
+static var _warn_mesh: TorusMesh = null
 
 ## Schaden der Explosion ohne den Effekt-Faktor der Welle (der kommt beim Zünden dazu).
 var damage: float = 0.0
@@ -35,6 +48,9 @@ var damage: float = 0.0
 var _arm_left: float = ARM_TIME
 var _time: float = 0.0
 var _lamp: MeshInstance3D = null
+var _halo: MeshInstance3D = null
+var _warn: MeshInstance3D = null
+var _lit: bool = false
 
 
 func _ready() -> void:
@@ -62,7 +78,17 @@ func _process(delta: float) -> void:
 	_time += delta
 	# Scharf: Das Lämpchen blinkt. Vorher glimmt es nur.
 	var lit: bool = is_armed() and fmod(_time, BLINK_TIME) < BLINK_TIME * BLINK_ON_SHARE
+	if lit == _lit:
+		return
+	_lit = lit
 	_lamp.material_override = _lamp_on if lit else _lamp_off
+	_halo.visible = lit
+	_warn.visible = lit
+
+
+## Leuchtet das Blinklicht gerade? (für Tests)
+func is_lit() -> bool:
+	return _lit
 
 
 ## Baut die Bühnen-Bombe aus einfachen Formen: gelber Sockel, schwarze Kugel, Zündschnur mit Lämpchen.
@@ -74,6 +100,12 @@ func _build_visual() -> void:
 	fuse.rotation.z = -0.35
 	_lamp = _add("Lamp", _lamp_mesh, Vector3(0.085, 0.5, 0.0))
 	_lamp.material_override = _lamp_off
+	_halo = _add("Halo", _halo_mesh, Vector3(0.085, 0.5, 0.0))
+	_halo.material_override = Fx.glow_material(HALO_COLOR)
+	_halo.visible = false
+	_warn = _add("Warn", _warn_mesh, Vector3(0.0, 0.03, 0.0))
+	_warn.material_override = Fx.glow_material(WARN_COLOR)
+	_warn.visible = false
 
 
 func _add(node_name: String, mesh: Mesh, at: Vector3) -> MeshInstance3D:
@@ -131,3 +163,13 @@ static func _prepare_shared() -> void:
 	_lamp_off = StandardMaterial3D.new()
 	_lamp_off.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_lamp_off.albedo_color = LAMP_IDLE_COLOR
+	_halo_mesh = SphereMesh.new()
+	_halo_mesh.radius = HALO_SIZE * 0.5
+	_halo_mesh.height = HALO_SIZE
+	_halo_mesh.radial_segments = 10
+	_halo_mesh.rings = 5
+	_warn_mesh = TorusMesh.new()
+	_warn_mesh.inner_radius = WARN_SIZE * 0.5 - 0.035
+	_warn_mesh.outer_radius = WARN_SIZE * 0.5
+	_warn_mesh.rings = 24
+	_warn_mesh.ring_segments = 4

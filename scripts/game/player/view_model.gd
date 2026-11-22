@@ -36,8 +36,16 @@ extends Node3D
 ##   tesla            Kurzschluss: dunkelblau, Kupferspule mit leuchtender Kugel an der Spitze
 ##   lmg              Marathonsendung: oliv, Laufmantel, Zweibein, Munitionskasten mit Gurt
 ##   auto_shotgun     Zuschauerfrage: hellblau-weiß, dicker Lauf, große gelbe Trommel
-## Jede Waffe hat einen Knoten "Muzzle" (Mündung): dort entsteht das Mündungsfeuer (Fx.muzzle_flash)
-## und dort beginnt die Leuchtspur.
+## Jede Waffe hat einen Knoten "Muzzle" (Mündung): dort sitzt ihr Mündungsfeuer (Knoten "Flash",
+## entsteht beim ersten Schuss und wird danach nur noch gezeigt und versteckt) und dort beginnt
+## die Leuchtspur.
+##
+## Mündungsfeuer (FLASH_STYLES): je Waffenart ein eigenes Bild aus Kern, Stichflamme nach vorn,
+## Stern quer zum Lauf und bei manchen Waffen seitlichen Flammen. Es steht nur wenige Bilder,
+## dreht sich je Schuss zufällig und bleibt so klein, dass es die Bildmitte nie erreicht
+## (FLASH_MAX_RADIUS). Ein einziges Licht (MuzzleLight) blitzt mit, es entsteht nie ein neues.
+## Hülsen (SHELL_SCALES): Waffen mit Patronen werfen je Schuss eine kleine Hülse aus, höchstens
+## SHELLS_PER_HAND je Hand zugleich, aus einem festen Vorrat von Knoten.
 
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
@@ -77,23 +85,23 @@ const WEAPON_OFFSETS: Dictionary = {
 const RECOIL: Dictionary = {
 	"pistol": { "back": 0.06, "pitch": 0.2, "roll": 0.03, "side": 0.004 },
 	"revolver": { "back": 0.09, "pitch": 0.36, "roll": 0.04, "side": 0.005 },
-	"smg": { "back": 0.034, "pitch": 0.055, "roll": 0.045, "side": 0.007 },
+	"smg": { "back": 0.042, "pitch": 0.075, "roll": 0.05, "side": 0.008 },
 	"sawed_off": { "back": 0.14, "pitch": 0.42, "roll": 0.06, "side": 0.008 },
 	"shotgun": { "back": 0.16, "pitch": 0.34, "roll": 0.05, "side": 0.008 },
-	"rifle": { "back": 0.04, "pitch": 0.05, "roll": 0.03, "side": 0.005 },
+	"rifle": { "back": 0.05, "pitch": 0.075, "roll": 0.035, "side": 0.006 },
 	"sniper": { "back": 0.2, "pitch": 0.3, "roll": 0.03, "side": 0.004 },
-	"minigun": { "back": 0.016, "pitch": 0.012, "roll": 0.03, "side": 0.007 },
+	"minigun": { "back": 0.024, "pitch": 0.022, "roll": 0.04, "side": 0.009 },
 	"rocket_launcher": { "back": 0.2, "pitch": 0.22, "roll": 0.05, "side": 0.008 },
-	"burst_pistol": { "back": 0.045, "pitch": 0.13, "roll": 0.03, "side": 0.004 },
-	"nail_gun": { "back": 0.02, "pitch": 0.03, "roll": 0.03, "side": 0.005 },
-	"machine_pistol": { "back": 0.028, "pitch": 0.045, "roll": 0.05, "side": 0.008 },
+	"burst_pistol": { "back": 0.05, "pitch": 0.15, "roll": 0.035, "side": 0.005 },
+	"nail_gun": { "back": 0.026, "pitch": 0.045, "roll": 0.035, "side": 0.006 },
+	"machine_pistol": { "back": 0.036, "pitch": 0.065, "roll": 0.055, "side": 0.009 },
 	"crossbow": { "back": 0.07, "pitch": 0.12, "roll": 0.03, "side": 0.004 },
 	"grenade_launcher": { "back": 0.15, "pitch": 0.3, "roll": 0.05, "side": 0.008 },
 	"flamethrower": { "back": 0.006, "pitch": 0.004, "roll": 0.02, "side": 0.004 },
 	"beam": { "back": 0.004, "pitch": 0.003, "roll": 0.012, "side": 0.003 },
 	"tesla": { "back": 0.08, "pitch": 0.12, "roll": 0.05, "side": 0.006 },
-	"lmg": { "back": 0.036, "pitch": 0.04, "roll": 0.035, "side": 0.006 },
-	"auto_shotgun": { "back": 0.11, "pitch": 0.2, "roll": 0.05, "side": 0.008 },
+	"lmg": { "back": 0.046, "pitch": 0.06, "roll": 0.04, "side": 0.007 },
+	"auto_shotgun": { "back": 0.12, "pitch": 0.22, "roll": 0.05, "side": 0.008 },
 }
 ## Waffen ohne Mündungsfeuer: Flamme und Strahl haben ihr eigenes Bild, die Armbrust kein Pulver.
 const NO_MUZZLE_FLASH: Array[String] = ["flamethrower", "beam", "crossbow"]
@@ -104,8 +112,62 @@ const RELOAD_TILT: Dictionary = {
 }
 ## Bei zwei Waffen kippen beide weniger, damit sie sich in der Bildmitte nicht kreuzen.
 const AKIMBO_RELOAD_TILT: float = 0.55
-const RECOIL_STIFFNESS: float = 240.0
-const RECOIL_DAMPING: float = 20.0
+## Feder des Rückstoßes: straff, damit die Waffe hart zurückschlägt und schnell wieder steht.
+const RECOIL_STIFFNESS: float = 300.0
+const RECOIL_DAMPING: float = 23.0
+## Mit dem Hochschlagen der Mündung hebt sich die Waffe um diesen Anteil (m je rad).
+const RECOIL_HOP: float = 0.05
+## Mündungsfeuer je Waffe. star: Durchmesser des Sterns quer zum Lauf, length: Länge der
+## Stichflamme nach vorn, blades: gekreuzte Flächen des Sterns (2 = vier Strahlen), side: Länge
+## der Flammen zur Seite (Mündungsbremse, 0 = keine), time: Dauer in Sekunden. Maße in Metern im
+## Maß der Waffe. Waffen aus NO_MUZZLE_FLASH fehlen hier.
+const FLASH_STYLES: Dictionary = {
+	"pistol": { "star": 0.2, "length": 0.18, "blades": 2, "side": 0.0, "time": 0.05, "color": Color(1.0, 0.82, 0.3) },
+	"revolver": { "star": 0.26, "length": 0.26, "blades": 3, "side": 0.08, "time": 0.065, "color": Color(1.0, 0.68, 0.25) },
+	"smg": { "star": 0.19, "length": 0.22, "blades": 2, "side": 0.0, "time": 0.04, "color": Color(0.5, 0.95, 1.0) },
+	"sawed_off": { "star": 0.28, "length": 0.2, "blades": 4, "side": 0.0, "time": 0.07, "color": Color(0.8, 1.0, 0.35) },
+	"shotgun": { "star": 0.3, "length": 0.26, "blades": 4, "side": 0.0, "time": 0.07, "color": Color(1.0, 0.6, 0.2) },
+	"rifle": { "star": 0.2, "length": 0.3, "blades": 3, "side": 0.0, "time": 0.045, "color": Color(0.6, 0.8, 1.0) },
+	"sniper": { "star": 0.22, "length": 0.42, "blades": 2, "side": 0.1, "time": 0.075, "color": Color(0.95, 0.6, 1.0) },
+	"minigun": { "star": 0.2, "length": 0.26, "blades": 3, "side": 0.0, "time": 0.035, "color": Color(1.0, 0.5, 0.8) },
+	"rocket_launcher": { "star": 0.3, "length": 0.18, "blades": 4, "side": 0.0, "time": 0.09, "color": Color(1.0, 0.55, 0.15) },
+	"burst_pistol": { "star": 0.19, "length": 0.18, "blades": 2, "side": 0.0, "time": 0.04, "color": Color(1.0, 0.65, 0.88) },
+	"nail_gun": { "star": 0.13, "length": 0.1, "blades": 2, "side": 0.0, "time": 0.035, "color": Color(0.85, 0.92, 1.0) },
+	"machine_pistol": { "star": 0.18, "length": 0.2, "blades": 2, "side": 0.0, "time": 0.035, "color": Color(0.65, 1.0, 0.6) },
+	"grenade_launcher": { "star": 0.28, "length": 0.16, "blades": 4, "side": 0.0, "time": 0.08, "color": Color(1.0, 0.7, 0.2) },
+	"tesla": { "star": 0.22, "length": 0.1, "blades": 4, "side": 0.0, "time": 0.07, "color": Color(0.4, 0.9, 1.0) },
+	"lmg": { "star": 0.22, "length": 0.3, "blades": 3, "side": 0.08, "time": 0.045, "color": Color(1.0, 0.85, 0.5) },
+	"auto_shotgun": { "star": 0.28, "length": 0.24, "blades": 4, "side": 0.0, "time": 0.06, "color": Color(0.4, 0.8, 1.0) },
+}
+## Das Mündungsfeuer beginnt mit FLASH_START mal seiner Größe, wächst bis FLASH_PEAK (nach dem
+## Anteil FLASH_PEAK_AT seiner Dauer) und fällt dann zusammen. Kein Teil reicht weiter als
+## FLASH_MAX_RADIUS von der Mündung zur Seite: So bleibt die Bildmitte (das Fadenkreuz) frei.
+const FLASH_START: float = 0.6
+const FLASH_PEAK: float = 1.1
+const FLASH_PEAK_AT: float = 0.35
+const FLASH_MAX_RADIUS: float = 0.16
+## Deckkraft der Teile (alle leuchten addierend und liegen übereinander: zusammen hell, einzeln
+## zurückhaltend, damit das Mündungsfeuer nicht zu einem weißen Fleck ausbrennt).
+const FLASH_STAR_ALPHA: float = 0.62
+const FLASH_CORE_ALPHA: float = 0.7
+const FLASH_SPIKE_ALPHA: float = 0.45
+const FLASH_LIGHT_ENERGY: float = 2.2
+const FLASH_LIGHT_RANGE: float = 5.0
+## Hülsen: Waffen, die welche auswerfen, mit ihrer Größe (1 = Pistolenhülse). Schrot wirft rote.
+const SHELL_SCALES: Dictionary = {
+	"pistol": 1.0, "smg": 1.0, "rifle": 1.25, "sniper": 1.6, "minigun": 1.1, "burst_pistol": 1.0,
+	"machine_pistol": 1.0, "lmg": 1.25, "shotgun": 1.9, "auto_shotgun": 1.9,
+}
+const SHELL_RED: Array[String] = ["shotgun", "auto_shotgun"]
+const SHELL_SIZE: Vector3 = Vector3(0.012, 0.012, 0.028)
+## Vorrat je Hand: Die älteste Hülse wird wiederverwendet.
+const SHELLS_PER_HAND: int = 6
+const SHELL_LIFE: float = 0.42
+const SHELL_GRAVITY: float = 9.0
+const SHELL_SPIN: float = 22.0
+## Der Auswurf sitzt rechts über dem Lauf, bei diesem Anteil des Wegs vom Griff zur Mündung.
+const SHELL_PORT_SHARE: float = 0.2
+const SHELL_PORT_OFFSET: Vector3 = Vector3(0.03, 0.012, 0.0)
 const SWITCH_TIME: float = 0.28
 const SWAY_GAIN: float = 0.011
 const SWAY_MAX: float = 0.045
@@ -197,6 +259,22 @@ class HandSlot:
 	var spin_speed: float = 0.0
 	## Steckt eine Rakete im Rohr (Raketenwerfer) oder ein Bolzen auf der Schiene (Armbrust)?
 	var rocket_loaded: bool = true
+	## weapon_id -> Node3D (Mündungsfeuer an der Mündung, entsteht beim ersten Schuss).
+	var flashes: Dictionary = {}
+	## Restzeit und Dauer des laufenden Mündungsfeuers, seine Größe (Zufall je Schuss).
+	var flash_left: float = 0.0
+	var flash_time: float = 0.05
+	var flash_size: float = 1.0
+	## Vorrat der Hülsen dieser Hand (Knoten unter side) mit Ort, Tempo, Drehachse, Alter, Größe.
+	## Ein Alter unter 0 heißt: Die Hülse ist nicht zu sehen.
+	var shells: Array[MeshInstance3D] = []
+	var shell_pos: PackedVector3Array = PackedVector3Array()
+	var shell_vel: PackedVector3Array = PackedVector3Array()
+	var shell_axis: PackedVector3Array = PackedVector3Array()
+	var shell_age: PackedFloat32Array = PackedFloat32Array()
+	var shell_scale: PackedFloat32Array = PackedFloat32Array()
+	var shell_next: int = 0
+	var shells_live: int = 0
 
 	func reset_motion() -> void:
 		kick_back.reset()
@@ -209,6 +287,7 @@ class HandSlot:
 		shots = 0
 		spin_speed = 0.0
 		rocket_loaded = true
+		flash_left = 0.0
 
 
 ## Waffe in der linken Hand (bei einer einzelnen Waffe: diese Waffe).
@@ -226,6 +305,11 @@ var _bob_phase: float = 0.0
 var _bob_weight: float = 0.0
 var _fall_offset: float = 0.0
 var _time: float = 0.0
+## Das eine Licht des Mündungsfeuers (für beide Hände) mit Restzeit und Dauer.
+var _muzzle_light: OmniLight3D
+var _light_left: float = 0.0
+var _light_time: float = 0.05
+var _shell_mesh: BoxMesh = null
 
 
 func _init() -> void:
@@ -243,6 +327,12 @@ func _init() -> void:
 		slot.holder.position = REST_POSITION
 		slot.side.add_child(slot.holder)
 		_slots.append(slot)
+	_muzzle_light = OmniLight3D.new()
+	_muzzle_light.name = "MuzzleLight"
+	_muzzle_light.omni_range = FLASH_LIGHT_RANGE
+	_muzzle_light.shadow_enabled = false
+	_muzzle_light.visible = false
+	add_child(_muzzle_light)
 	set_weapon(weapon_id)
 	for slot: HandSlot in _slots:
 		slot.switch_progress = 1.0
@@ -279,6 +369,17 @@ func _process(delta: float) -> void:
 				slot.is_reloading = false
 				slot.rocket_loaded = true
 		_apply_pose(slot)
+		if slot.flash_left > 0.0:
+			_update_flash(slot, dt)
+	for slot: HandSlot in _slots:
+		if slot.shells_live > 0:
+			_update_shells(slot, dt)
+	if _light_left > 0.0:
+		_light_left -= dt
+		if _light_left <= 0.0:
+			_muzzle_light.visible = false
+		else:
+			_muzzle_light.light_energy = FLASH_LIGHT_ENERGY * _light_left / _light_time
 
 
 # --- Öffentliche Schnittstelle ---------------------------------------------------------------
@@ -333,7 +434,7 @@ func get_hand_ids() -> Array[String]:
 	return ids
 
 
-## Ein Schuss dieser Hand: Rückstoß und Mündungsfeuer.
+## Ein Schuss dieser Hand: Rückstoß, Mündungsfeuer und Hülse.
 func play_fire(hand: int = 0) -> void:
 	var slot: HandSlot = _slot(hand)
 	if slot == null:
@@ -350,9 +451,11 @@ func play_fire(hand: int = 0) -> void:
 	slot.spin_speed = minf(slot.spin_speed + SPIN_PER_SHOT, SPIN_MAX)
 	if slot.weapon_id == "rocket_launcher" or slot.weapon_id == "crossbow":
 		slot.rocket_loaded = false
-	if not NO_MUZZLE_FLASH.has(slot.weapon_id):
-		Fx.muzzle_flash(get_muzzle_node(hand))
 	_apply_pose(slot)
+	if FLASH_STYLES.has(slot.weapon_id) and not NO_MUZZLE_FLASH.has(slot.weapon_id):
+		_start_flash(slot)
+	if SHELL_SCALES.has(slot.weapon_id):
+		_eject_shell(slot)
 
 
 ## Weltposition der Mündung dieser Hand: Startpunkt der Leuchtspur und Ort des Mündungsfeuers.
@@ -371,6 +474,42 @@ func get_muzzle_node(hand: int = 0) -> Node3D:
 	if slot == null:
 		return null
 	return slot.muzzles.get(slot.weapon_id, null) as Node3D
+
+
+## Knoten des Mündungsfeuers der Waffe in dieser Hand. null, solange sie noch nie geschossen hat
+## oder kein Mündungsfeuer hat.
+func get_flash_node(hand: int = 0) -> Node3D:
+	var slot: HandSlot = _slot(hand)
+	if slot == null:
+		return null
+	return slot.flashes.get(slot.weapon_id, null) as Node3D
+
+
+## Ist an der Mündung dieser Hand gerade Mündungsfeuer zu sehen?
+func is_flash_visible(hand: int = 0) -> bool:
+	var flash: Node3D = get_flash_node(hand)
+	return flash != null and flash.visible
+
+
+## Größter Abstand, den ein Teil des Mündungsfeuers dieser Waffe quer zum Lauf von der Mündung
+## hat (im Maß der Waffe, also vor VIEW_SCALE). 0 ohne Mündungsfeuer.
+func flash_radius(id: String) -> float:
+	if not FLASH_STYLES.has(id) or NO_MUZZLE_FLASH.has(id):
+		return 0.0
+	var style: Dictionary = FLASH_STYLES[id]
+	return minf(FLASH_MAX_RADIUS, maxf(float(style["star"]) * 0.5, float(style["side"])) * FLASH_PEAK)
+
+
+## Zahl der Hülsen dieser Hand, die gerade fliegen.
+func live_shell_count(hand: int = 0) -> int:
+	if hand < 0 or hand >= _slots.size():
+		return 0
+	return _slots[hand].shells_live
+
+
+## Das Licht des Mündungsfeuers (eines für alle Schüsse).
+func get_muzzle_light() -> OmniLight3D:
+	return _muzzle_light
 
 
 # --- Signale ---------------------------------------------------------------------------------
@@ -418,8 +557,168 @@ func _show_weapon(slot: HandSlot, id: String, mirrored: bool) -> void:
 		_build_model(slot, id)
 	for model_id: String in slot.models.keys():
 		(slot.models[model_id] as Node3D).visible = model_id == id
+	for flash: Node3D in slot.flashes.values():
+		flash.visible = false
+	_hide_shells(slot)
 	slot.reset_motion()
 	slot.switch_progress = 0.0
+
+
+# --- Mündungsfeuer und Hülsen ----------------------------------------------------------------
+
+
+## Zündet das Mündungsfeuer dieser Hand: Der Knoten an der Mündung entsteht beim ersten Schuss
+## und wird danach nur gezeigt. Je Schuss zufällig gedreht und etwas anders groß.
+func _start_flash(slot: HandSlot) -> void:
+	var id: String = slot.weapon_id
+	var muzzle: Node3D = slot.muzzles.get(id, null) as Node3D
+	if muzzle == null:
+		return
+	var style: Dictionary = FLASH_STYLES[id]
+	var flash: Node3D = slot.flashes.get(id, null) as Node3D
+	if flash == null:
+		flash = _build_flash(style)
+		muzzle.add_child(flash)
+		slot.flashes[id] = flash
+	slot.flash_time = float(style["time"])
+	slot.flash_left = slot.flash_time
+	slot.flash_size = randf_range(0.85, 1.0)
+	(flash.get_node("Star") as Node3D).rotation.z = randf() * TAU
+	flash.scale = Vector3.ONE * slot.flash_size * FLASH_START
+	flash.visible = true
+	_light_time = slot.flash_time
+	_light_left = _light_time
+	_muzzle_light.light_color = (style["color"] as Color).lerp(Color.WHITE, 0.3)
+	_muzzle_light.light_energy = FLASH_LIGHT_ENERGY
+	_muzzle_light.visible = true
+	if is_inside_tree():
+		_muzzle_light.global_position = muzzle.global_position
+
+
+func _update_flash(slot: HandSlot, dt: float) -> void:
+	var flash: Node3D = slot.flashes.get(slot.weapon_id, null) as Node3D
+	slot.flash_left -= dt
+	if flash == null:
+		slot.flash_left = 0.0
+		return
+	if slot.flash_left <= 0.0:
+		flash.visible = false
+		return
+	var k: float = 1.0 - slot.flash_left / slot.flash_time
+	var size: float = lerpf(FLASH_START, FLASH_PEAK, k / FLASH_PEAK_AT) if k < FLASH_PEAK_AT \
+		else lerpf(FLASH_PEAK, 0.1, (k - FLASH_PEAK_AT) / (1.0 - FLASH_PEAK_AT))
+	flash.scale = Vector3.ONE * slot.flash_size * size
+
+
+## Baut das Mündungsfeuer einer Waffenart: Kern, Stichflamme nach vorn (-Z), Stern quer zum Lauf
+## und, wenn die Art es will, Flammen nach links und rechts. Die Materialien sind die
+## Leuchtmaterialien aus fx.gd (keine neue Art).
+func _build_flash(style: Dictionary) -> Node3D:
+	var star_size: float = minf(float(style["star"]), FLASH_MAX_RADIUS * 2.0 / FLASH_PEAK)
+	var length: float = float(style["length"])
+	var side: float = minf(float(style["side"]), FLASH_MAX_RADIUS / FLASH_PEAK)
+	var color: Color = style["color"]
+	var hot: StandardMaterial3D = Fx.glow_material(Color(color.r, color.g, color.b, FLASH_STAR_ALPHA))
+	var white: StandardMaterial3D = Fx.glow_material(Color(1.0, 1.0, 0.92, FLASH_CORE_ALPHA))
+	var pale: Color = color.lerp(Color.WHITE, 0.4)
+	var tongue: StandardMaterial3D = Fx.glow_material(Color(pale.r, pale.g, pale.b, FLASH_SPIKE_ALPHA))
+	var flash: Node3D = Node3D.new()
+	flash.name = "Flash"
+	flash.visible = false
+	var core: MeshInstance3D = _ball(flash, 0.5, Vector3.ZERO, white)
+	core.name = "Core"
+	core.scale = Vector3.ONE * star_size * 0.34
+	var spike: MeshInstance3D = _ball(flash, 0.5, Vector3(0.0, 0.0, -length * 0.42), tongue)
+	spike.name = "Spike"
+	spike.scale = Vector3(star_size * 0.24, star_size * 0.24, length)
+	var star: Node3D = Node3D.new()
+	star.name = "Star"
+	flash.add_child(star)
+	var blades: int = maxi(1, int(style["blades"]))
+	for i: int in blades:
+		var quad: QuadMesh = QuadMesh.new()
+		quad.size = Vector2(star_size, star_size * 0.26)
+		var blade: MeshInstance3D = _mesh_instance(star, quad, Vector3.ZERO, hot)
+		blade.rotation.z = PI * float(i) / float(blades)
+	if side > 0.0:
+		for direction: float in [-1.0, 1.0]:
+			var jet: MeshInstance3D = _ball(flash, 0.5, Vector3(direction * side * 0.5, 0.0, 0.0), tongue)
+			jet.name = "SideLeft" if direction < 0.0 else "SideRight"
+			jet.scale = Vector3(side, star_size * 0.22, star_size * 0.22)
+	return flash
+
+
+## Wirft eine Hülse aus: nach rechts oben (bei der gespiegelten linken Waffe nach links oben),
+## leicht nach hinten. Die Hülsen liegen im Raum der Hand, nicht der Waffe: Der Rückstoß nimmt
+## sie nicht mit.
+func _eject_shell(slot: HandSlot) -> void:
+	var id: String = slot.weapon_id
+	var muzzle: Node3D = slot.muzzles.get(id, null) as Node3D
+	var gun: Node3D = slot.models.get(id, null) as Node3D
+	if muzzle == null or gun == null:
+		return
+	if slot.shells.is_empty():
+		_build_shells(slot)
+	var index: int = slot.shell_next
+	slot.shell_next = (index + 1) % SHELLS_PER_HAND
+	var port: Vector3 = Vector3(SHELL_PORT_OFFSET.x, muzzle.position.y + SHELL_PORT_OFFSET.y, muzzle.position.z * SHELL_PORT_SHARE)
+	var node: MeshInstance3D = slot.shells[index]
+	if slot.shell_age[index] < 0.0:
+		slot.shells_live += 1
+	slot.shell_pos[index] = slot.holder.transform * (gun.transform * port)
+	slot.shell_vel[index] = Vector3(randf_range(1.1, 1.8), randf_range(0.9, 1.6), randf_range(0.1, 0.6))
+	slot.shell_axis[index] = Vector3(randf_range(-1.0, 1.0), randf_range(-0.4, 0.4), randf_range(-1.0, 1.0)).normalized()
+	slot.shell_age[index] = 0.0
+	slot.shell_scale[index] = float(SHELL_SCALES[id])
+	node.material_override = _material(COLOR_RED, 0.5, 0.2) if SHELL_RED.has(id) else _material(COLOR_GOLD, 0.6, 0.7)
+	node.transform = Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * slot.shell_scale[index]), slot.shell_pos[index])
+	node.visible = true
+
+
+func _update_shells(slot: HandSlot, dt: float) -> void:
+	for index: int in slot.shells.size():
+		var age: float = slot.shell_age[index]
+		if age < 0.0:
+			continue
+		age += dt
+		var node: MeshInstance3D = slot.shells[index]
+		if age >= SHELL_LIFE:
+			node.visible = false
+			slot.shell_age[index] = -1.0
+			slot.shells_live -= 1
+			continue
+		slot.shell_age[index] = age
+		var velocity: Vector3 = slot.shell_vel[index]
+		velocity.y -= SHELL_GRAVITY * dt
+		slot.shell_vel[index] = velocity
+		var pos: Vector3 = slot.shell_pos[index] + velocity * dt
+		slot.shell_pos[index] = pos
+		node.transform = Transform3D(Basis(slot.shell_axis[index], age * SHELL_SPIN).scaled(Vector3.ONE * slot.shell_scale[index]), pos)
+
+
+## Legt den Vorrat der Hülsen dieser Hand an (einmal, beim ersten Auswurf).
+func _build_shells(slot: HandSlot) -> void:
+	if _shell_mesh == null:
+		_shell_mesh = BoxMesh.new()
+		_shell_mesh.size = SHELL_SIZE
+	slot.shell_pos.resize(SHELLS_PER_HAND)
+	slot.shell_vel.resize(SHELLS_PER_HAND)
+	slot.shell_axis.resize(SHELLS_PER_HAND)
+	slot.shell_age.resize(SHELLS_PER_HAND)
+	slot.shell_scale.resize(SHELLS_PER_HAND)
+	for index: int in SHELLS_PER_HAND:
+		var node: MeshInstance3D = _mesh_instance(slot.side, _shell_mesh, Vector3.ZERO, _material(COLOR_GOLD, 0.6, 0.7))
+		node.name = "Shell%d" % index
+		node.visible = false
+		slot.shells.append(node)
+		slot.shell_age[index] = -1.0
+
+
+func _hide_shells(slot: HandSlot) -> void:
+	for index: int in slot.shells.size():
+		slot.shells[index].visible = false
+		slot.shell_age[index] = -1.0
+	slot.shells_live = 0
 
 
 # --- Bewegung --------------------------------------------------------------------------------
@@ -490,6 +789,7 @@ func _apply_pose(slot: HandSlot) -> void:
 	# Rückstoß.
 	pos.z += slot.kick_back.value
 	pos.x += slot.kick_side
+	pos.y += slot.kick_pitch.value * RECOIL_HOP
 	rot.x += slot.kick_pitch.value
 	rot.z += slot.kick_roll
 	# Nachhängen und Wippen.

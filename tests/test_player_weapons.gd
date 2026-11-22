@@ -9,7 +9,9 @@ extends SceneTree
 ## Schnelldurchlauf, jeweils nur für die Waffe auf den Sternen. Dazu die zehn Waffen aus Abschnitt
 ## 22.2: Salve, eingebauter Durchschlag, eingebauter Blitz, Granate im Bogen, Flammenkegel mit
 ## Brand, Dauerstrahl, Treffer-Punkte von Flamme und Strahl, Eröffnungsgag und Schlusspointe, die
-## zehn neuen Modelle (auch in der zweiten Hand).
+## zehn neuen Modelle (auch in der zweiten Hand). Dazu die Bilder der Treffer: Obergrenzen des
+## Effekt-Vorrats, Aufräumen, keine Kollision, Mündungsfeuer und Hülsen, Kamera-Wackeln und dass
+## ein Lauf mit festem Seed von den Effekten unberührt bleibt.
 ##
 ## Startet in _initialize und wartet ein Bild (Autoloads, siehe Architektur 13.7). Die Skripte
 ## des Spiels werden zur Laufzeit mit load() geholt, weil sie Game und Events benutzen.
@@ -26,6 +28,7 @@ const HEADSHOT_RATIO: float = Balance.HEADSHOT_HEIGHT_RATIO
 class Dummy:
 	extends StaticBody3D
 	var is_dead: bool = false
+	var zombie_type: String = "walker"
 	var body_height: float = 3.0
 	var hits: Array[Dictionary] = []
 	## Jeder Brand, den die Waffe setzt: [Schaden je Sekunde, Dauer].
@@ -156,6 +159,11 @@ func _run() -> void:
 		await _test_not_playing()
 		await _test_view_model()
 		await _test_new_models()
+		await _test_effect_limits()
+		await _test_effect_calls()
+		await _test_view_effects()
+		await _test_camera_shake()
+		await _test_seed_with_effects()
 		await _test_health_and_death()
 		await _test_movement()
 		await _test_steps()
@@ -316,18 +324,17 @@ func _attach(item_id: String, level: int, weapon_uids: Array[int]) -> int:
 	return uid
 
 
-## Leuchtspuren, die gerade in der Welt hängen: dünne, lang gezogene Quader direkt unter der
-## Wurzel (Fx.tracer). Am Namen sind sie nicht zu erkennen, Godot benennt gleichnamige Knoten um.
+## Leuchtspuren, die gerade in der Welt hängen (Fx.tracer): Sie liegen im Vorrat der Effekte
+## unter der Wurzel. Ohne Vorrat fliegt nichts.
 func _tracer_count() -> int:
-	var count: int = 0
-	for child: Node in root.get_children():
-		var beam: MeshInstance3D = child as MeshInstance3D
-		if beam == null or beam.is_queued_for_deletion() or not beam.mesh is BoxMesh:
-			continue
-		var axes: Basis = beam.global_transform.basis
-		if axes.z.length() > 1.0 and axes.x.length() < 0.1:
-			count += 1
-	return count
+	var pool: Node = _fx_pool()
+	return 0 if pool == null else int(pool.call("tracer_count"))
+
+
+## Der Vorrat der kleinen Effekt-Teile unter der Wurzel, null wenn es gerade keinen gibt.
+func _fx_pool() -> Node:
+	var fx: GDScript = load("res://scripts/game/fx/fx.gd") as GDScript
+	return fx.call("find_pool", root) as Node
 
 
 ## Winkel in Grad zwischen der Blickrichtung und dem Einschlag eines Treffers.
@@ -3021,8 +3028,9 @@ func _test_view_model() -> void:
 	view_model.play_fire(1)
 	_check(right_holder.position.z > right_rest + 0.02 and absf(left_holder.position.z - left_rest) < 0.005,
 		"Der Rückstoß trifft nur die Hand, die schießt.")
-	_check(view_model.get_node("Rig/Hand1/Holder/Gun_smg/Muzzle").get_child_count() > 0, "Das Mündungsfeuer entsteht an der Mündung der rechten Hand.")
-	_check(view_model.get_node("Rig/Hand0/Holder/Gun_pistol/Muzzle").get_child_count() == 0, "An der linken Mündung blitzt nichts.")
+	_check(view_model.get_node("Rig/Hand1/Holder/Gun_smg/Muzzle").get_child_count() > 0 and view_model.is_flash_visible(1),
+		"Das Mündungsfeuer entsteht an der Mündung der rechten Hand.")
+	_check(not view_model.is_flash_visible(0), "An der linken Mündung blitzt nichts.")
 	await _wait(0.5)
 	_events.emit_signal("hand_reload_started", 0, 1.0)
 	await _wait(0.4)
@@ -3038,6 +3046,401 @@ func _test_view_model() -> void:
 	_weapons.try_fire()
 	await _frames(3)
 	_check(view_model.get_node("Rig/Hand0/Holder").position.is_finite(), "Rückstoß hält das Modell in gültiger Lage.")
+
+
+# --- Effekte: Obergrenzen, Aufräumen, keine Kollision, Kamera-Wackeln, fester Seed ------------
+
+
+## Wartet, bis kein Effekt-Vorrat mehr unter der Wurzel hängt (Einschussmale leben einige Sekunden).
+func _await_no_pool() -> void:
+	for _i: int in 80:
+		if _fx_pool() == null:
+			return
+		await _wait(0.1)
+
+
+## Instanz-Nummern der Kinder der Wurzel (ohne Behälter hängen Effekte direkt dort).
+func _root_children() -> Dictionary:
+	var ids: Dictionary = {}
+	for child: Node in root.get_children():
+		ids[child.get_instance_id()] = true
+	return ids
+
+
+## Kinder der Wurzel, die seit before dazugekommen sind und nicht gerade gelöscht werden.
+func _new_root_children(before: Dictionary) -> Array[Node]:
+	var result: Array[Node] = []
+	for child: Node in root.get_children():
+		if not before.has(child.get_instance_id()) and not child.is_queued_for_deletion():
+			result.append(child)
+	return result
+
+
+## Die Obergrenzen des Effekt-Vorrats halten, auch wenn hundertmal mehr verlangt wird. Kein
+## Effekt hat Kollision, keiner würfelt mit Game.rng, und alle räumen sich selbst weg.
+func _test_effect_limits() -> void:
+	_game.start_run(11)
+	await _clear_dummies()
+	await _place_player(Vector3.ZERO)
+	await _await_no_pool()
+	var fx: GDScript = load("res://scripts/game/fx/fx.gd") as GDScript
+	var fx_consts: Dictionary = fx.get_script_constant_map()
+	var pool_consts: Dictionary = (load("res://scripts/game/fx/fx_pool.gd") as GDScript).get_script_constant_map()
+	var max_tracers: int = pool_consts["MAX_TRACERS"]
+	var max_sparks: int = pool_consts["MAX_SPARKS"]
+	var max_blobs: int = pool_consts["MAX_BLOBS"]
+	var max_decals: int = pool_consts["MAX_DECALS"]
+	_check(_fx_pool() == null and int(fx.call("live_number_count")) == 0, "Aufbau: Vor dem Test hängt kein Effekt in der Welt.")
+	var before: Dictionary = _root_children()
+	var rng_state: int = _game.rng.state
+	for i: int in 100:
+		fx.call("tracer", root, Vector3(float(i) * 0.1, 1.0, 0.0), Vector3(float(i) * 0.1, 1.0, -20.0), Color.YELLOW)
+	var pool: Node = _fx_pool()
+	_check(pool != null, "Die erste Leuchtspur legt den Vorrat an.")
+	if pool == null:
+		return
+	_check(int(pool.call("tracer_count")) == max_tracers, "Hundert Leuchtspuren: Es fliegen genau %d (Obergrenze), waren %d." % [max_tracers, int(pool.call("tracer_count"))])
+	for i: int in 100:
+		fx.call("impact", root, Vector3(float(i) * 0.1, 0.0, -5.0), Vector3.UP, Color.CYAN)
+	_check(int(pool.call("spark_count")) > 0 and int(pool.call("spark_count")) <= max_sparks,
+		"Hundert Einschläge: höchstens %d Funken, waren %d." % [max_sparks, int(pool.call("spark_count"))])
+	_check(int(pool.call("decal_count")) == max_decals, "Hundert Einschläge: genau %d Einschussmale (das älteste weicht), waren %d." % [max_decals, int(pool.call("decal_count"))])
+	for i: int in 100:
+		fx.call("splatter", root, Vector3(0.0, 1.0, -5.0), Vector3.FORWARD, i % 2 == 0, i % 3 == 0)
+		fx.call("kill_burst", root, Vector3(0.0, 1.0, -5.0), 1.5)
+	_check(int(pool.call("blob_count")) == max_blobs, "Hundert Spritzer und hundert geplatzte Zombies: genau %d Tropfen (Obergrenze), waren %d." % [max_blobs, int(pool.call("blob_count"))])
+	_check(int(pool.call("spark_count")) <= max_sparks, "Auch mit den Funken kritischer Treffer bleibt es bei höchstens %d Funken." % max_sparks)
+	for i: int in 30:
+		fx.call("explosion", root, Vector3(float(i), 1.0, -10.0), 3.0, Color.ORANGE)
+		fx.call("lightning", root, PackedVector3Array([Vector3(float(i), 1.0, -8.0), Vector3(float(i), 2.0, -12.0)]))
+		fx.call("shockwave", root, Vector3(float(i), 0.0, -10.0), 4.0)
+	var lights: int = 0
+	var pools: int = 0
+	for child: Node in _new_root_children(before):
+		if child is OmniLight3D:
+			lights += 1
+		if child == pool:
+			pools += 1
+		elif child.get_script() == pool.get_script():
+			pools += 1
+	_check(lights <= int(fx_consts["MAX_LIVE_LIGHTS"]), "Dreißig Explosionen, Blitze und Druckwellen: höchstens %d Lichter, waren %d." % [fx_consts["MAX_LIVE_LIGHTS"], lights])
+	_check(pools == 1, "Es gibt genau einen Vorrat, waren %d." % pools)
+	_check(int(pool.call("spark_count")) <= max_sparks and int(pool.call("blob_count")) <= max_blobs, "Glut und Rauch der Explosionen halten die Obergrenzen.")
+	for i: int in 100:
+		fx.call("damage_number", root, Vector3(float(i) * 2.0, 2.0, -5.0), 10.0 + float(i), Color.WHITE)
+	_check(int(fx.call("live_number_count")) == int(fx_consts["MAX_LIVE_NUMBERS"]), "Hundert Trefferzahlen an hundert Stellen: genau %d sind zu sehen, waren %d." % [fx_consts["MAX_LIVE_NUMBERS"], int(fx.call("live_number_count"))])
+	# Der Vorrat selbst wächst nie: drei MultiMesh fester Größe und höchstens MAX_DECALS Male.
+	var mesh_sizes: Array[int] = []
+	var decal_nodes: int = 0
+	for child: Node in pool.get_children():
+		if child is MultiMeshInstance3D:
+			mesh_sizes.append((child as MultiMeshInstance3D).multimesh.instance_count)
+		elif child is MeshInstance3D:
+			decal_nodes += 1
+	mesh_sizes.sort()
+	var wanted_sizes: Array[int] = [max_tracers, max_sparks, max_blobs]
+	wanted_sizes.sort()
+	_check(mesh_sizes == wanted_sizes and decal_nodes == max_decals and pool.get_child_count() == 3 + max_decals,
+		"Der Vorrat hat drei MultiMesh fester Größe und %d Knoten für Male, war %s und %d." % [max_decals, mesh_sizes, decal_nodes])
+	# Kein Effekt hat Kollision.
+	var colliders: Array[String] = []
+	var effects: Array[Node] = _new_root_children(before)
+	_check(effects.size() > 100, "Aufbau: Die Effekte hängen in der Welt, waren %d Knoten." % effects.size())
+	for child: Node in effects:
+		if child is CollisionObject3D or child is CollisionShape3D \
+				or not child.find_children("*", "CollisionObject3D", true, false).is_empty() \
+				or not child.find_children("*", "CollisionShape3D", true, false).is_empty():
+			colliders.append(String(child.name))
+	_check(colliders.is_empty(), "Kein Effekt hat Kollision, mit Kollision: %s." % [colliders])
+	_check(_game.rng.state == rng_state, "Die Effekte würfeln nie mit Game.rng.")
+	# Trefferzahlen: Größe nach Schaden, Kopftreffer und kritischer Treffer größer.
+	_check(float(fx.call("number_size", 10.0)) < float(fx.call("number_size", 100.0)) and float(fx.call("number_size", 100.0)) < float(fx.call("number_size", 300.0)),
+		"Größere Treffer haben größere Zahlen.")
+	_check(float(fx.call("number_size", 50.0, true)) > float(fx.call("number_size", 50.0)) and float(fx.call("number_size", 50.0, false, true)) > float(fx.call("number_size", 50.0, true)),
+		"Kopftreffer sind größer als normale Treffer, kritische noch größer.")
+	# Alles räumt sich selbst weg: Am längsten bleiben die Einschussmale.
+	await _wait(float(pool_consts["DECAL_LIFE"]) + float(pool_consts["IDLE_FREE_TIME"]) + 0.6)
+	var left: Array[Node] = _new_root_children(before)
+	_check(left.is_empty(), "Alle Effekte haben sich selbst weggeräumt, übrig: %d." % left.size())
+	_check(_fx_pool() == null, "Auch der Vorrat ist wieder weg.")
+	_check(int(fx.call("live_number_count")) == 0, "Keine Trefferzahl ist mehr zu sehen.")
+	# Zusammenzählen: Treffer an derselben Stelle im selben Augenblick ergeben eine Zahl.
+	for _i: int in 8:
+		fx.call("damage_number", root, Vector3(0.0, 2.0, -5.0), 14.0, Color.WHITE)
+	fx.call("damage_number", root, Vector3(0.0, 2.0, -5.0), 14.0, Color.YELLOW)
+	fx.call("damage_number", root, Vector3(3.0, 2.0, -5.0), 14.0, Color.WHITE)
+	_check(int(fx.call("live_number_count")) == 3, "Acht Schrotkugeln an einer Stelle zählen in einer Zahl zusammen (dazu eine andere Farbe und eine andere Stelle), Zahlen: %d." % int(fx.call("live_number_count")))
+	var texts: Array[String] = []
+	for child: Node in _new_root_children(before):
+		if child is Label3D:
+			texts.append((child as Label3D).text)
+	texts.sort()
+	_check(texts == (["112", "14", "14"] as Array[String]), "Die zusammengezählte Zahl zeigt die Summe (112), Zahlen: %s." % [texts])
+	# Kritischer Treffer: eigene Farbe und Ausrufezeichen, aber nur für den angekündigten Betrag.
+	fx.call("hint_number", 50.0, false, true)
+	fx.call("damage_number", root, Vector3(-4.0, 2.0, -5.0), 33.0, Color.CYAN)
+	fx.call("damage_number", root, Vector3(-6.0, 2.0, -5.0), 50.0, Color.WHITE)
+	fx.call("damage_number", root, Vector3(-8.0, 2.0, -5.0), 50.0, Color.WHITE)
+	fx.call("clear_number_hint")
+	var crit_labels: int = 0
+	var crit_color_ok: bool = false
+	for child: Node in _new_root_children(before):
+		var label: Label3D = child as Label3D
+		if label != null and label.text.ends_with("!"):
+			crit_labels += 1
+			crit_color_ok = label.text == "50!" and Color(label.modulate, 1.0).is_equal_approx(fx_consts["CRIT_NUMBER_COLOR"] as Color)
+	_check(crit_labels == 1 and crit_color_ok, "Nur die angekündigte Zahl ist kritisch: einmal 50! in der Krit-Farbe, waren %d." % crit_labels)
+	await _wait(float(fx_consts["NUMBER_TIME"]) + float(fx_consts["NUMBER_MERGE_TIME"]) + 0.4)
+	_check(_new_root_children(before).is_empty() and int(fx.call("live_number_count")) == 0, "Auch diese Zahlen sind wieder weg.")
+
+
+## Die Waffe ruft die Bilder der Treffer: Einschlag an der Wand, Spritzer am Zombie, Platzen beim
+## Tod, und sie kündigt die Trefferzahl eines kritischen Treffers an.
+func _test_effect_calls() -> void:
+	var fx: GDScript = load("res://scripts/game/fx/fx.gd") as GDScript
+	var uids: Array[int] = _pack_weapons([["pistol", Vector2i(2, 2)]])
+	for i: int in 4:
+		_attach("crit", 5, [uids[0]] as Array[int])
+	_game.sync_build()
+	await _await_no_pool()
+	var before: Dictionary = _root_children()
+	var wall: StaticBody3D = _add_block("FxWall", Vector3(0.0, 2.0, -8.0), Vector3(8.0, 4.0, 0.5))
+	var target: Dummy = _add_dummy("F", Vector3(6.0, 0.0, -6.0), 1.8)
+	await _place_player(Vector3.ZERO)
+	_player.look_at_point(Vector3(0.0, 1.5, -7.75))
+	_ready_weapon()
+	# Zwilling von Game.rng: Er macht nur die Würfe der Regeln mit (zwei je Schuss für die Streuung).
+	var twin: RandomNumberGenerator = RandomNumberGenerator.new()
+	twin.seed = _game.rng.seed
+	twin.state = _game.rng.state
+	_check(_weapons.try_fire(), "Aufbau: Der Schuss auf die Wand fällt.")
+	var pool: Node = _fx_pool()
+	_check(pool != null and int(pool.call("decal_count")) == 1 and int(pool.call("spark_count")) >= 2 and int(pool.call("tracer_count")) == 1,
+		"Ein Schuss auf die Wand: eine Leuchtspur, Funken und ein Einschussmal.")
+	if pool != null:
+		var mark: MeshInstance3D = null
+		for child: Node in pool.get_children():
+			if child is MeshInstance3D and (child as MeshInstance3D).visible:
+				mark = child as MeshInstance3D
+		_check(mark != null and absf(mark.global_position.z + 7.75) < 0.05 and mark.global_transform.basis.z.normalized().dot(Vector3.BACK) > 0.99,
+			"Das Einschussmal liegt flach auf der getroffenen Wand und zeigt zum Schützen.")
+		var blobs_before: int = int(pool.call("blob_count"))
+		_player.look_at_point(Vector3(6.0, 0.9, -5.7))
+		_ready_weapon()
+		# Wer die Trefferzahl zeigt (im Spiel UpgradeEffects), kennt nur Betrag und Farbe.
+		var show_number: Callable = func(_zombie: Node3D, damage: float, info: Dictionary) -> void:
+			fx.call("damage_number", root, info["hit_position"], damage, Color.WHITE)
+		_events.connect("bullet_hit", show_number)
+		_weapons.try_fire()
+		_events.disconnect("bullet_hit", show_number)
+		_check(target.hits.size() == 1 and target.hits[0]["info"].get("crit") == true, "Aufbau: Der Treffer am Zombie ist kritisch.")
+		_check(int(pool.call("blob_count")) >= blobs_before + 4, "Der Treffer am Zombie spritzt, neue Tropfen: %d." % (int(pool.call("blob_count")) - blobs_before))
+		var crit_text: String = ""
+		for child: Node in _new_root_children(before):
+			if child is Label3D:
+				crit_text = (child as Label3D).text
+		_check(crit_text == "50!", "Die Trefferzahl des kritischen Treffers trägt ein Ausrufezeichen, war \"%s\"." % crit_text)
+		# Nach dem Treffer ist die Ankündigung verbraucht: Eine fremde Zahl mit demselben Betrag bleibt normal.
+		fx.call("damage_number", root, Vector3(-9.0, 2.0, -5.0), 50.0, Color.CYAN)
+		var plain: bool = false
+		for child: Node in _new_root_children(before):
+			if child is Label3D and (child as Label3D).text == "50":
+				plain = true
+		_check(plain, "Die Ankündigung gilt nur für diesen einen Treffer.")
+		var blobs_hit: int = int(pool.call("blob_count"))
+		_events.emit_signal("zombie_killed", target, {"source": "explosion"})
+		_check(int(pool.call("blob_count")) > blobs_hit + 6, "Ein sterbender Zombie platzt (egal wodurch), neue Tropfen: %d." % (int(pool.call("blob_count")) - blobs_hit))
+	for _i: int in 4:
+		twin.randf()
+	_check(_game.rng.state == twin.state, "Zwei Schüsse würfeln genau viermal für die Streuung: Die Bilder nehmen nichts aus Game.rng.")
+	wall.queue_free()
+	await _clear_dummies()
+	await _await_no_pool()
+	_check(_new_root_children(before).is_empty(), "Einschlag, Spritzer und Zahlen räumen sich weg, übrig: %d." % _new_root_children(before).size())
+
+
+## Mündungsfeuer je Waffenart, Hülsen aus einem festen Vorrat, ein einziges Licht.
+func _test_view_effects() -> void:
+	_game.start_run(11)
+	await _place_player(Vector3.ZERO)
+	var view_model: Node3D = _player.get_node("Camera/ViewModel")
+	var styles: Dictionary = view_model.FLASH_STYLES
+	var silent: Array = view_model.NO_MUZZLE_FLASH
+	var shell_weapons: Dictionary = view_model.SHELL_SCALES
+	for weapon_id: String in WeaponDefs.ORDER:
+		_check(styles.has(weapon_id) != silent.has(weapon_id), "%s hat entweder ein eigenes Mündungsfeuer oder steht in NO_MUZZLE_FLASH." % weapon_id)
+	# Das Mündungsfeuer erreicht nie die Bildmitte: Sein größter Radius ist kleiner als der Abstand
+	# der Mündung zur Blickachse (beides im Bild der Kamera, mit Reserve für das Fadenkreuz).
+	var lights_before: int = _player.find_children("*", "OmniLight3D", true, false).size()
+	for weapon_id: String in WeaponDefs.ORDER:
+		view_model.set_weapon(weapon_id)
+		# Die Waffe steht nach dem Hochkommen in Ruhe (ohne echte Wartezeit).
+		for _i: int in 10:
+			view_model.call("_process", 0.05)
+		var in_view: Vector3 = _muzzle_in_view(0)
+		var off_axis: float = Vector2(in_view.x, in_view.y).length()
+		var radius: float = float(view_model.flash_radius(weapon_id)) * float(view_model.VIEW_SCALE)
+		_check(float(view_model.flash_radius(weapon_id)) <= float(view_model.FLASH_MAX_RADIUS) + 0.0001 and radius * 1.25 < off_axis,
+			"%s: Das Mündungsfeuer (Radius %s) bleibt neben der Bildmitte (Mündung %s daneben)." % [weapon_id, radius, off_axis])
+		view_model.play_fire(0)
+		_check(view_model.is_flash_visible(0) != silent.has(weapon_id), "%s: Mündungsfeuer genau dann, wenn die Waffe Pulver hat." % weapon_id)
+		_check((int(view_model.live_shell_count(0)) == 1) == shell_weapons.has(weapon_id), "%s: Hülse genau dann, wenn die Waffe welche auswirft." % weapon_id)
+		# Kurz: Nach einer Zehntelsekunde ist das Mündungsfeuer aus, nach einer halben die Hülse weg.
+		for _i: int in 2:
+			view_model.call("_process", 0.05)
+		_check(not view_model.is_flash_visible(0) and not view_model.get_muzzle_light().visible, "%s: Das Mündungsfeuer steht höchstens eine Zehntelsekunde." % weapon_id)
+		for _i: int in 8:
+			view_model.call("_process", 0.05)
+		_check(int(view_model.live_shell_count(0)) == 0, "%s: Die Hülse ist nach einer halben Sekunde weg." % weapon_id)
+	_check(_player.find_children("*", "OmniLight3D", true, false).size() == lights_before, "Kein Schuss legt ein neues Licht an (vorher und nachher %d)." % lights_before)
+	# Dauerfeuer: Der Vorrat der Hülsen wächst nie.
+	view_model.set_weapon("minigun")
+	for _i: int in 10:
+		view_model.call("_process", 0.05)
+	for _i: int in 40:
+		view_model.play_fire(0)
+		view_model.call("_process", 0.01)
+	var shells_per_hand: int = view_model.SHELLS_PER_HAND
+	var shell_nodes: int = 0
+	for child: Node in view_model.get_node("Rig/Hand0").get_children():
+		if String(child.name).begins_with("Shell"):
+			shell_nodes += 1
+	_check(int(view_model.live_shell_count(0)) == shells_per_hand and shell_nodes == shells_per_hand,
+		"Vierzig Schüsse Dauerfeuer: höchstens %d Hülsen fliegen, aus genau %d Knoten (waren %d und %d)." % [shells_per_hand, shells_per_hand, int(view_model.live_shell_count(0)), shell_nodes])
+	var flashes: int = 0
+	for child: Node in view_model.get_muzzle_node(0).get_children():
+		flashes += 1
+	_check(flashes == 1, "Die Mündung hat genau ein Mündungsfeuer, das wiederverwendet wird (waren %d Knoten)." % flashes)
+	_check(view_model.find_children("*", "CollisionObject3D", true, false).is_empty(), "Mündungsfeuer und Hülsen haben keine Kollision.")
+	# Der Wechsel der Waffe räumt Mündungsfeuer und Hülsen weg.
+	view_model.set_weapon("pistol")
+	_check(int(view_model.live_shell_count(0)) == 0 and not view_model.is_flash_visible(0), "Nach dem Wechsel der Waffe fliegt nichts mehr.")
+	_game.start_run(11)
+	await _settle()
+
+
+## Kamera-Wackeln: klein, klingt schnell ab, lenkt keinen Schuss ab und lässt die Blickrichtung,
+## wie sie war.
+func _test_camera_shake() -> void:
+	_game.start_run(11)
+	await _clear_dummies()
+	await _place_player(Vector3.ZERO)
+	var camera: Camera3D = _player.get_camera()
+	var look: Vector3 = Vector3(3.0, 2.0, -12.0)
+	var max_angle: float = float(_player.FX_SHAKE_MAX_ANGLE) * float(_player.CAMERA_SHAKE_STRENGTH)
+	_check(float(_player.CAMERA_SHAKE_STRENGTH) > 0.0 and max_angle <= deg_to_rad(1.5), "Die Stärke des Wackelns steht in einer Konstante und bleibt klein (höchstens 1,5 Grad), war %s Grad." % rad_to_deg(max_angle))
+	_player.look_at_point(look)
+	await _frames(2)
+	var aim: Vector3 = _player.get_aim_direction()
+	_check(is_zero_approx(_player.get_camera_shake()) and aim.angle_to(-camera.global_transform.basis.z) < 0.00001, "In Ruhe zeigt die Kamera genau in Blickrichtung.")
+	_player.add_camera_shake(1.0)
+	_check(is_equal_approx(_player.get_camera_shake(), 1.0), "add_camera_shake setzt die Stärke.")
+	var widest: float = 0.0
+	var aim_drift: float = 0.0
+	for _i: int in 6:
+		await _wait(0.02)
+		widest = maxf(widest, aim.angle_to(-camera.global_transform.basis.z))
+		aim_drift = maxf(aim_drift, aim.angle_to(_player.get_aim_direction()))
+	_check(widest > 0.0005, "Das Wackeln bewegt das Bild, größter Winkel %s Grad." % rad_to_deg(widest))
+	_check(widest <= max_angle * 1.5, "Das Wackeln bleibt klein: höchstens %s Grad, waren %s." % [rad_to_deg(max_angle * 1.5), rad_to_deg(widest)])
+	_check(aim_drift < 0.00001, "get_aim_direction rechnet das Wackeln heraus: Die Schüsse fliegen, als gäbe es keins (Abweichung %s)." % aim_drift)
+	await _wait(1.0 / float(_player.FX_SHAKE_DECAY) + 0.15)
+	_check(is_zero_approx(_player.get_camera_shake()), "Das Wackeln ist nach einer Drittelsekunde abgeklungen, Rest %s." % _player.get_camera_shake())
+	_check(aim.angle_to(-camera.global_transform.basis.z) < 0.00001 and aim.angle_to(_player.get_aim_direction()) < 0.00001,
+		"Nach dem Abklingen stehen Kamera und Blickrichtung genau wie vorher.")
+	# Mehrere Auslöser addieren sich nicht.
+	_player.add_camera_shake(0.3)
+	_player.add_camera_shake(0.2)
+	_player.add_camera_shake(5.0)
+	_check(is_equal_approx(_player.get_camera_shake(), 1.0), "Die Stärke ist bei 1 gedeckelt.")
+	_player.look_at_point(look)
+	_player.add_camera_shake(0.3)
+	_player.add_camera_shake(0.2)
+	_check(is_equal_approx(_player.get_camera_shake(), 0.3), "Ein schwächerer Auslöser erhöht ein laufendes Wackeln nicht.")
+	# Eigene starke Schüsse wackeln, schwache nicht.
+	var shot_shake: Dictionary = _player.SHOT_SHAKE
+	_player.look_at_point(look)
+	_events.emit_signal("weapon_fired", "pistol")
+	_check(is_zero_approx(_player.get_camera_shake()), "Die Pistole wackelt nicht.")
+	_events.emit_signal("weapon_fired", "shotgun")
+	_check(is_equal_approx(_player.get_camera_shake(), float(shot_shake["shotgun"])) and float(shot_shake["shotgun"]) > 0.2, "Die Schrotflinte wackelt mit ihrer Stärke.")
+	# Explosionen: je näher, desto stärker, weit weg gar nicht.
+	var eye: Vector3 = _player.get_eye_position()
+	_player.look_at_point(look)
+	_events.emit_signal("explosion", eye + Vector3(0.0, 0.0, -40.0), 3.0)
+	_check(is_zero_approx(_player.get_camera_shake()), "Eine Explosion in 40 m Abstand wackelt nicht.")
+	_events.emit_signal("explosion", eye + Vector3(0.0, 0.0, -7.0), 3.0)
+	var far: float = _player.get_camera_shake()
+	_player.look_at_point(look)
+	_events.emit_signal("explosion", eye + Vector3(0.0, 0.0, -2.0), 3.0)
+	var near: float = _player.get_camera_shake()
+	_check(far > 0.0 and near > far and near <= 1.0, "Eine nahe Explosion wackelt stärker als eine ferne (%s und %s)." % [near, far])
+	# Eigene Treffer: winzig, Kopftreffer und kritische etwas mehr, tödliche am meisten.
+	var dummy: Dummy = _add_dummy("S", Vector3(0.0, 0.0, -20.0))
+	_player.look_at_point(look)
+	_events.emit_signal("bullet_hit", dummy, 10.0, {"source": "bullet"})
+	var plain_hit: float = _player.get_camera_shake()
+	_player.look_at_point(look)
+	_events.emit_signal("bullet_hit", dummy, 10.0, {"source": "bullet", "headshot": true})
+	var strong_hit: float = _player.get_camera_shake()
+	_player.look_at_point(look)
+	_events.emit_signal("zombie_killed", dummy, {"source": "explosion"})
+	var foreign_kill: float = _player.get_camera_shake()
+	_events.emit_signal("zombie_killed", dummy, {"source": "bullet"})
+	var own_kill: float = _player.get_camera_shake()
+	_check(plain_hit > 0.0 and strong_hit > plain_hit and own_kill > strong_hit and own_kill < 0.3 and is_zero_approx(foreign_kill),
+		"Eigene Treffer wackeln winzig: Treffer %s, Kopftreffer %s, eigener Kill %s, fremder Kill %s." % [plain_hit, strong_hit, own_kill, foreign_kill])
+	# look_at_point (Tests, Werkzeuge) stellt alles still.
+	_player.add_camera_shake(1.0)
+	_player.look_at_point(look)
+	_check(is_zero_approx(_player.get_camera_shake()), "look_at_point setzt das Wackeln zurück.")
+	_game.start_run(11)
+	await _clear_dummies()
+
+
+## Ein Lauf mit festem Seed bleibt gleich, egal was die Effekte würfeln und ob die Kamera wackelt:
+## dieselben Einschläge, derselbe Schaden, derselbe Stand von Game.rng.
+func _test_seed_with_effects() -> void:
+	var runs: Array = []
+	for run: int in 3:
+		_game.start_run(11)
+		_hold_item("shotgun", 1)
+		await _clear_dummies()
+		var target: Dummy = _add_dummy("R", Vector3(0.0, 0.0, -4.0), 6.0, 6.0)
+		await _place_player(Vector3.ZERO)
+		_game.rng.seed = 4711
+		# Der Zufall der Effekte (globaler Generator) ist in jedem Durchgang ein anderer.
+		seed(1000 + run * 77)
+		var positions: PackedVector3Array = PackedVector3Array()
+		var total: float = 0.0
+		for _shot: int in 3:
+			_player.look_at_point(Vector3(0.3, 2.0, -4.0))
+			if run == 2:
+				_player.add_camera_shake(1.0)
+			await _frames(3)
+			_ready_weapon()
+			_reset_records()
+			_weapons.try_fire()
+			for hit: Dictionary in target.hits:
+				positions.append(hit["info"]["hit_position"])
+				total += float(hit["amount"])
+		runs.append({"positions": positions, "total": total, "state": _game.rng.state})
+	randomize()
+	var first: Dictionary = runs[0]
+	_check((first["positions"] as PackedVector3Array).size() == 24, "Aufbau: Drei Schüsse Schrot treffen mit 24 Kugeln, waren %d." % (first["positions"] as PackedVector3Array).size())
+	for run: int in [1, 2]:
+		var other: Dictionary = runs[run]
+		var same: bool = (other["positions"] as PackedVector3Array).size() == (first["positions"] as PackedVector3Array).size()
+		var widest: float = 0.0
+		if same:
+			for i: int in (first["positions"] as PackedVector3Array).size():
+				widest = maxf(widest, (first["positions"] as PackedVector3Array)[i].distance_to((other["positions"] as PackedVector3Array)[i]))
+		var label: String = "mit anderem Zufall der Effekte" if run == 1 else "mit wackelnder Kamera"
+		_check(same and widest < 0.0001, "Fester Seed %s: dieselben Einschläge (größter Abstand %s m)." % [label, widest])
+		_check(is_equal_approx(float(other["total"]), float(first["total"])) and other["state"] == first["state"],
+			"Fester Seed %s: derselbe Schaden und derselbe Stand von Game.rng." % label)
+	_game.start_run(11)
+	await _clear_dummies()
 
 
 func _test_health_and_death() -> void:

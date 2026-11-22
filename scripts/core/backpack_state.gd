@@ -8,10 +8,15 @@ extends RefCounted
 ## (Startform des Kandidaten plus eingeräumte Rucksack-Teile). x läuft nach rechts, y nach unten.
 ##
 ## Ein Gegenstand ist ein Dictionary:
-##   { "uid": int, "id": String, "level": int, "rot": int, "placed": bool, "pos": Vector2i }
+##   { "uid": int, "id": String, "level": int, "rot": int, "placed": bool, "pos": Vector2i,
+##     "broken": bool }
 ## uid ist je Rucksack eindeutig und größer als 0. "level" ist die Rarität (1 bis 5). Nicht
 ## eingeräumte Gegenstände liegen in der Ablage (placed = false) und wirken nicht. pos ist die
-## linke obere Ecke der gedrehten Form.
+## linke obere Ecke der gedrehten Form. Die Ablage hat keine Grenze (Abschnitt 26).
+##
+## Kaputt (Abschnitt 26): Ein kaputter Gegenstand (broken = true) liegt immer in der Ablage. Er
+## lässt sich weder einräumen noch kombinieren und wirkt deshalb nirgends, bis er repariert ist
+## (repair). Rucksack-Teile sind nie kaputt.
 ##
 ## Waffen und Hände: Jede eingeräumte Waffe hält der Spieler in der Hand. Zusammen dürfen die
 ## eingeräumten Waffen höchstens Balance.PLAYER_HANDS Hände brauchen, sonst passt die Waffe nicht.
@@ -34,7 +39,9 @@ const UpgradeState := preload("res://scripts/core/upgrade_state.gd")
 
 const COLS: int = Balance.BACKPACK_COLS
 const ROWS: int = Balance.BACKPACK_ROWS
-const STORAGE_CAPACITY: int = Balance.BACKPACK_STORAGE
+## VERALTET (Abschnitt 26): Die Ablage hat keine Grenze mehr. Die Zahl ist nur noch eine Hülle für
+## alten Code, der sie liest, und so groß, dass sie nie erreicht wird. Nicht mehr benutzen.
+const STORAGE_CAPACITY: int = 999999
 const NEIGHBOR_STEPS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 ## Vorhandene Felder des Rasters: Vector2i -> true.
@@ -91,14 +98,19 @@ func occupant(cell: Vector2i) -> int:
 # --- Gegenstände ----------------------------------------------------------------------
 
 ## Neuer Gegenstand in die Ablage. Gibt seine uid zurück, -1 bei unbekannter ID.
-func add_item(id: String, level: int = 1) -> int:
+## broken = true: Er ist kaputt und muss erst repariert werden (repair). Ein Rucksack-Teil ist nie
+## kaputt, auch wenn broken = true übergeben wird.
+func add_item(id: String, level: int = 1, broken: bool = false) -> int:
 	if not ItemDefs.has(id):
 		return -1
 	var uid: int = _next_uid
 	_next_uid += 1
 	# "level" ist die Rarität (1 = Gewöhnlich bis 5 = Legendär). Rucksack-Teile haben keine.
 	var item_level: int = clampi(level, 1, Balance.UPGRADE_MAX_LEVEL) if ItemDefs.has_rarity(id) else 1
-	_items.append({"uid": uid, "id": id, "level": item_level, "rot": 0, "placed": false, "pos": Vector2i.ZERO})
+	_items.append({
+		"uid": uid, "id": id, "level": item_level, "rot": 0, "placed": false, "pos": Vector2i.ZERO,
+		"broken": broken and not ItemDefs.is_bag(id),
+	})
 	return uid
 
 
@@ -135,9 +147,39 @@ func storage_items() -> Array[Dictionary]:
 	return result
 
 
-## Liegt mehr in der Ablage, als hineinpasst? Dann darf der Rucksack nicht geschlossen werden.
+## VERALTET (Abschnitt 26): Die Ablage hat keine Grenze mehr, die Antwort ist immer false. Nur
+## noch eine Hülle für alten Code, der danach fragt. Nicht mehr benutzen.
 func storage_overflow() -> bool:
-	return storage_items().size() > STORAGE_CAPACITY
+	return false
+
+
+## Ist dieser Gegenstand kaputt? false auch für eine unbekannte uid.
+func is_broken(uid: int) -> bool:
+	var index: int = _index_of(uid)
+	return index >= 0 and bool(_items[index]["broken"])
+
+
+## Macht einen Gegenstand kaputt oder heil. Wird ein eingeräumter Gegenstand kaputt, kommt er
+## zuerst in die Ablage (ein kaputter Gegenstand ist nie eingeräumt). Gibt true zurück, wenn sich
+## etwas geändert hat. false bei unbekannter uid, wenn er schon so ist, und für Rucksack-Teile
+## (sie werden nie kaputt).
+func set_broken(uid: int, broken: bool) -> bool:
+	var index: int = _index_of(uid)
+	if index < 0 or bool(_items[index]["broken"]) == broken:
+		return false
+	if broken and ItemDefs.is_bag(str(_items[index]["id"])):
+		return false
+	_items[index]["broken"] = broken
+	if broken:
+		_items[index]["placed"] = false
+	return true
+
+
+## Repariert einen kaputten Gegenstand: Er bleibt in der Ablage liegen und lässt sich ab jetzt
+## einräumen und kombinieren. false, wenn es ihn nicht gibt oder er nicht kaputt ist. Was das
+## kostet, regelt Game.repair_item.
+func repair(uid: int) -> bool:
+	return set_broken(uid, false)
 
 
 ## Höchste Rarität (1 bis 5), in der dieser Gegenstand im Rucksack oder in der Ablage liegt.
@@ -204,9 +246,10 @@ func has_free_hands(uid: int) -> bool:
 ## dazu freie Hände (has_free_hands).
 ## Rucksack-Teile: alle Felder liegen im Raster, existieren noch nicht, und mindestens eines grenzt
 ## an ein vorhandenes Feld.
+## Ein kaputter Gegenstand passt nirgends (Abschnitt 26).
 func can_place(uid: int, pos: Vector2i, rot: int) -> bool:
 	var index: int = _index_of(uid)
-	if index < 0:
+	if index < 0 or bool(_items[index]["broken"]):
 		return false
 	var id: String = str(_items[index]["id"])
 	var wanted: Array[Vector2i] = shape_at(id, pos, rot)
@@ -252,9 +295,9 @@ func place(uid: int, pos: Vector2i, rot: int) -> bool:
 
 
 ## Erste passende Stelle für den Gegenstand (zeilenweise, Drehungen 0 bis 3):
-## { "pos": Vector2i, "rot": int }, leer wenn er nirgends passt.
+## { "pos": Vector2i, "rot": int }, leer wenn er nirgends passt oder kaputt ist.
 func find_spot(uid: int) -> Dictionary:
-	if not has_item(uid):
+	if not has_item(uid) or is_broken(uid):
 		return {}
 	for rot: int in 4:
 		for y: int in ROWS:
@@ -264,7 +307,7 @@ func find_spot(uid: int) -> Dictionary:
 	return {}
 
 
-## Räumt den Gegenstand an die erste passende Stelle. false, wenn er nirgends passt.
+## Räumt den Gegenstand an die erste passende Stelle. false, wenn er nirgends passt oder kaputt ist.
 func auto_place(uid: int) -> bool:
 	var spot: Dictionary = find_spot(uid)
 	if spot.is_empty():
@@ -299,10 +342,11 @@ func remove(uid: int) -> Dictionary:
 
 
 ## uid des eingeräumten Gegenstands auf cell, mit dem sich uid kombinieren lässt: derselbe
-## Gegenstand in derselben Rarität, ein anderer als uid, noch nicht Legendär. Sonst -1.
+## Gegenstand in derselben Rarität, ein anderer als uid, noch nicht Legendär. Sonst -1, auch wenn
+## uid kaputt ist.
 func merge_target(uid: int, cell: Vector2i) -> int:
 	var index: int = _index_of(uid)
-	if index < 0 or not ItemDefs.has_rarity(str(_items[index]["id"])):
+	if index < 0 or not ItemDefs.has_rarity(str(_items[index]["id"])) or bool(_items[index]["broken"]):
 		return -1
 	var other: int = occupant(cell)
 	if other == -1 or other == uid:
@@ -317,17 +361,43 @@ func merge_target(uid: int, cell: Vector2i) -> int:
 	return other
 
 
-## Kombiniert uid mit target: target steigt um eine Rarität, uid verschwindet.
-func merge(uid: int, target_uid: int) -> bool:
+## Lässt sich uid mit target_uid kombinieren? Derselbe Gegenstand in derselben Rarität, zwei
+## verschiedene Exemplare, noch nicht Legendär. Wo die beiden liegen, ist gleich: im Raster
+## oder in der Ablage. Ist einer der beiden kaputt, geht es nicht (Abschnitt 26).
+func can_merge(uid: int, target_uid: int) -> bool:
+	if uid == target_uid:
+		return false
+	var index: int = _index_of(uid)
 	var target_index: int = _index_of(target_uid)
-	if target_index < 0 or not bool(_items[target_index]["placed"]):
+	if index < 0 or target_index < 0:
 		return false
-	var first_cell: Array[Vector2i] = cells_of(target_uid)
-	if first_cell.is_empty() or merge_target(uid, first_cell[0]) != target_uid:
+	if bool(_items[index]["broken"]) or bool(_items[target_index]["broken"]):
 		return false
+	var item_id: String = str(_items[index]["id"])
+	if not ItemDefs.has_rarity(item_id) or str(_items[target_index]["id"]) != item_id:
+		return false
+	if int(_items[target_index]["level"]) != int(_items[index]["level"]):
+		return false
+	return int(_items[target_index]["level"]) < Balance.UPGRADE_MAX_LEVEL
+
+
+## Kombiniert uid mit target: target steigt um eine Rarität und bleibt, wo es liegt (im Raster
+## oder in der Ablage), uid verschwindet.
+func merge(uid: int, target_uid: int) -> bool:
+	if not can_merge(uid, target_uid):
+		return false
+	var target_index: int = _index_of(target_uid)
 	_items[target_index]["level"] = int(_items[target_index]["level"]) + 1
 	_items.remove_at(_index_of(uid))
 	return true
+
+
+## uid eines Gegenstands in der Ablage, mit dem sich uid kombinieren lässt, -1 wenn es keinen gibt.
+func find_storage_merge_partner(uid: int) -> int:
+	for entry: Dictionary in _items:
+		if not bool(entry["placed"]) and can_merge(uid, int(entry["uid"])):
+			return int(entry["uid"])
+	return -1
 
 
 ## uid eines eingeräumten Gegenstands, mit dem sich uid kombinieren lässt (derselbe Gegenstand,

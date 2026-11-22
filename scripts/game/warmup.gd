@@ -13,6 +13,7 @@ extends Node
 
 const ShaderKeep := preload("res://scripts/game/fx/shader_keep.gd")
 const UiStyle := preload("res://scripts/ui/hud.gd")
+const Settings := preload("res://scripts/game/settings.gd")
 
 const LAYER: int = 100
 ## Mitte des Aufbaus, weit weg vom Studio.
@@ -72,6 +73,15 @@ func run() -> void:
 	print("Shader vorgewärmt: %d Arten in %d ms" % [ShaderKeep.known_count(), last_duration_ms])
 
 
+## Text unter der Überschrift des Ladebilds. Mit dem Unterbau „Schnell“ (OpenGL-Treiber der
+## Grafikkarte) übersetzt der Treiber die Shader bei jedem Start neu: Das Bild steht dann 10 bis
+## 15 s still, und der Text sagt das, damit niemand an einen Absturz glaubt.
+static func loading_text(driver: int) -> String:
+	if driver == Settings.DRIVER_FAST:
+		return "Das Studio wird aufgebaut.\nMit dem Grafik-Unterbau „Schnell“ dauert das bei jedem Start 10 bis 15 Sekunden."
+	return "Das Studio wird aufgebaut.\nBeim allerersten Start dauert das etwas länger."
+
+
 func _build_overlay() -> CanvasLayer:
 	var overlay: CanvasLayer = CanvasLayer.new()
 	overlay.name = "LoadingScreen"
@@ -86,8 +96,7 @@ func _build_overlay() -> CanvasLayer:
 	headline.rotation_degrees = -3.0
 	UiStyle.anchor_box(headline, Vector2(0.5, 0.5), Vector2(0.0, -110.0), Vector2.ZERO)
 	overlay.add_child(headline)
-	var subline: Label = UiStyle.make_label(
-		"Das Studio wird aufgebaut.\nBeim allerersten Start dauert das etwas länger.", 24, UiStyle.COL_WHITE, true)
+	var subline: Label = UiStyle.make_label(loading_text(Settings.active_driver()), 24, UiStyle.COL_WHITE, true)
 	subline.name = "Subline"
 	subline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UiStyle.anchor_box(subline, Vector2(0.5, 0.5), Vector2(-500.0, 30.0), Vector2(1000.0, 80.0))

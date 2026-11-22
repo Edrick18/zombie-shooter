@@ -1,25 +1,64 @@
-Geräusche des Spiels
-====================
+Geräusche und Musik des Spiels
+==============================
 
-Alle WAV-Dateien in diesem Ordner sind berechnet (kein fremdes Material). Sie entstehen mit
+Alle WAV-Dateien in diesem Ordner sind berechnet (kein fremdes Material). Sie entstehen im
+Projektordner mit
 
-    python tools/make_sounds.py
+    python tools/make_sounds.py     98 Geräusche (16 Bit, Mono, 44100 Hz, das Publikum 22050 Hz)
+    python tools/make_music.py      5 Musikstücke (16 Bit, Stereo, 22050 Hz)
+    python tools/check_mix.py       rechnet nach, wie laut alles zusammen wird (schreibt nichts)
 
-im Projektordner. Das Skript schreibt jede Datei neu (16 Bit, Mono, 44100 Hz, Spitzenpegel
--3 dBFS) und druckt eine Tabelle mit Länge und Pegel. Es sind 61 Dateien.
+Jede Datei hat die Spitze -3 dBFS und keinen Gleichanteil, sie beginnt und endet bei null
+(Schleifen ausgenommen, siehe unten). Beide
+Skripte schreiben alles neu (immer dieselben Dateien, der Zufall hat einen festen Startwert) und
+drucken eine Tabelle mit Länge, Pegel, Tiefenanteil und, bei Schleifen, dem Sprung an der Naht.
+Mit --check prüfen sie nur, mit --only=name,name schreiben sie nur diese Dateien neu.
+Danach Godot einmal die Dateien einlesen lassen (Editor öffnen oder:
+Godot --headless --import --path <Projekt>) und die EXE neu bauen.
+
+Lautstärken nachstellen
+-----------------------
+
+Nichts davon steht in den Dateien, alles im Code und in den Einstellungen:
+
+    scripts/game/audio/sfx.gd          Tabelle SOUNDS: je Geräusch Grundlautstärke (db), Streuung der
+                                       Tonhöhe (pitch), Mindestabstand (gap), Zahl der Varianten,
+                                       Hall ja/nein (room), Zurückdrängen der Musik (duck).
+                                       Darüber die Zahlen für Schritte, Landen, Herzschlag, Raunen
+    scripts/game/audio/music.gd        Tabelle LAYERS: Lautstärke je Musikstück. Darunter Dauer der
+                                       Überblendung, Dämpfung in Pause und Rucksack, Zurückdrängen
+    scripts/game/audio/audio_buses.gd  Begrenzer (Decke) und Nachhall (Größe, Anteil, Dämpfung)
+    Einstellungen im Spiel             drei Regler: Lautstärke (alles, Standard 80 %), Musik (70 %),
+                                       Geräusche (100 %)
+
+Busse: Master (Begrenzer) <- Sfx <- Reverb (Nachhall) und Master <- Music (Tiefpass). Geräusche mit
+Ort in der Welt, Schüsse und Schritte laufen über Reverb, alles andere trocken über Sfx.
 
 Eigene Geräusche einsetzen
 --------------------------
 
 Jede Datei lässt sich durch eine echte Aufnahme ersetzen: einfach eine WAV-Datei mit demselben
-Namen hier ablegen (z. B. shot_pistol.wav). Danach Godot einmal die Dateien einlesen lassen
-(Editor öffnen oder: Godot --headless --import --path <Projekt>) und die EXE neu bauen.
-Achtung: make_sounds.py überschreibt die Dateien wieder. Wer eigene Aufnahmen behalten will,
-ruft das Skript danach nicht mehr auf (oder nimmt das Geräusch dort aus der Liste SOUNDS).
+Namen hier ablegen (z. B. shot_pistol.wav), Godot einlesen lassen, EXE neu bauen.
+Achtung: make_sounds.py und make_music.py überschreiben die Dateien wieder. Wer eigene Aufnahmen
+behalten will, ruft sie danach nicht mehr auf (oder nimmt das Geräusch dort aus der Liste SOUNDS
+bzw. TRACKS).
 
 Fehlt eine Datei, bleibt dieses Geräusch im Spiel einfach stumm.
 
-Welche Datei wann erklingt, steht in scripts/game/audio/sfx.gd. Kurz:
+Varianten
+---------
+
+Häufige Geräusche gibt es mehrfach: Die erste Datei heißt wie das Geräusch (hit.wav), die weiteren
+hit_2.wav, hit_3.wav. Das Spiel wählt bei jedem Start zufällig eine und nie zweimal dieselbe
+hintereinander. Varianten haben: shot_pistol, shot_smg, shot_rifle, shot_minigun,
+shot_burst_pistol, shot_nail_gun, shot_machine_pistol, shot_lmg, shot_auto_shotgun, hit,
+zombie_death, explosion (je 3) und step (4). Wer ein solches Geräusch ersetzt, ersetzt am besten
+alle seine Dateien. Wie viele es sind, steht in sfx.gd (SOUNDS, "variants").
+
+Welche Datei wann erklingt
+--------------------------
+
+Genau steht es im Kopf von scripts/game/audio/sfx.gd. Kurz:
 
     shot_<waffe>.wav        Schuss je Waffe (pistol, revolver, smg, sawed_off, shotgun, rifle,
                             sniper, minigun, rocket_launcher, burst_pistol, nail_gun,
@@ -33,15 +72,25 @@ Welche Datei wann erklingt, steht in scripts/game/audio/sfx.gd. Kurz:
     player_hurt             der Spieler nimmt Schaden
     shield_hit / _recharge  Treffer aufs Schild / Schild lädt wieder
     dash                    Ausweichsprung
+    step                    Schritt des Spielers (alle 1,8 m, beim Sprinten also schneller)
+    land                    der Spieler kommt nach einem Sprung auf
+    heartbeat               Herzschlag unter 30 % Leben, je weniger desto schneller
     chest_drop, chest_open  Kiste fällt / Kiste wird geöffnet
     card_chosen             Karte aus der Kiste gewählt
     upgrade, synergy        Upgrade gestiegen / Verbindung freigeschaltet
     backpack_open / _close  Rucksack auf / zu
     item_sold, purchase     Gegenstand verkauft / Tür bezahlt
+    item_repaired           Gegenstand repariert (Ratsche)
+    item_scrapped           Gegenstand verschrottet (Blech wird zerknüllt)
+    material_gain           Material kommt dazu (Klimpern)
     wave_start              Fanfare zum Wellenbeginn
     wave_cleared            Welle geschafft
     countdown_tick          die letzten drei Sekunden vor der Welle
     game_over               Game Over
+    crowd_cheer             das Publikum klatscht und jubelt (Welle geschafft)
+    crowd_gasp              das Publikum erschrickt (schwerer Treffer am Spieler)
+    crowd_aww               das Publikum ist enttäuscht (Game Over)
+    crowd_murmur            leises Raunen des Publikums, Schleife, läuft während der Sendung
     ui_hover, ui_click      Knöpfe im Menü
     explosion, lightning    Explosion / Blitz
     drone_shot              Schuss der Kameradrohne
@@ -56,6 +105,38 @@ Welche Datei wann erklingt, steht in scripts/game/audio/sfx.gd. Kurz:
     bank_coins              Gutschrift aufs Konto am Ende eines Laufs
     ricochet                ein Querschläger trifft einen zweiten Zombie
     thorns                  die Dornen treffen einen Zombie
+
+Musik
+-----
+
+    music_menu        Kandidatenwahl, Programm, nach dem Abgesang. F-Dur, 105 Schläge je Minute,
+                      16 Takte (36,57 s), Schleife
+    music_calm        Pause zwischen den Wellen. d-Moll, 126 Schläge je Minute, 8 Takte (15,24 s),
+                      Schleife
+    music_wave        in der Welle. d-Moll, 126 Schläge je Minute, 16 Takte (30,48 s), Schleife
+    music_late        ab Welle 10: eine Zusatzspur, die ÜBER music_wave läuft (allein klingt sie
+                      leer). Gleiche Länge, gleiches Tempo, Schleife
+    music_game_over   Abgesang bei Game Over, 8,6 s, keine Schleife
+
+music_calm, music_wave und music_late laufen im Spiel gleichzeitig und im Takt, gewechselt wird nur
+über ihre Lautstärken (Überblendung in 1 s). Wer sie ersetzt, hält deshalb Tempo, Tonart und Länge
+ein: music_late so lang wie music_wave, music_wave ein ganzes Vielfaches von music_calm.
+Welches Stück wann läuft, steht im Kopf von scripts/game/audio/music.gd.
+
+Die Musik liest Godot unkomprimiert ein (in der Import-Notiz .import: compress/mode=0), sonst
+rauscht sie bei 22050 Hz hörbar. make_music.py trägt das selbst ein.
+
+Schleifen
+---------
+
+music_menu, music_calm, music_wave, music_late und crowd_murmur sind Schleifen. Sie beginnen und
+enden nicht bei null: Ihr Ende geht ohne Sprung in ihren Anfang über. Die Schleifenpunkte stehen in
+der Datei (Eintrag "smpl", Anfang 0, Ende = Länge der Schleife), Godot übernimmt sie beim Einlesen
+(Import-Einstellung Loop Mode: Detect From WAV). Hinter dem Schleifenende stehen noch drei Werte,
+die den Anfang wiederholen, damit der Abspieler beim Glätten über die Naht die richtigen Nachbarn
+findet.
+Eine eigene Schleife ohne diesen Eintrag funktioniert auch: Das Spiel erklärt dann die ganze Datei
+zur Schleife. Sie muss nur selbst nahtlos sein (in einem Tonprogramm als Schleife prüfen).
 
 Flammenwerfer und Strahl (Dauerfeuer)
 -------------------------------------

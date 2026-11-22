@@ -314,12 +314,20 @@ const MINE_RADIUS: float = 3.0
 ## Größtes Raster des Rucksacks in Feldern.
 const BACKPACK_COLS: int = 7
 const BACKPACK_ROWS: int = 5
-## So viele Gegenstände passen in die Ablage neben dem Rucksack.
-const BACKPACK_STORAGE: int = 5
 ## Punkte beim Verkaufen: Gegenstand der Rarität Gewöhnlich (jede Rarität darüber verdoppelt,
 ## weil sie aus zwei Gegenständen der Rarität darunter entsteht) und Rucksack-Teil.
 const ITEM_SELL_BASE: int = 100
 const ITEM_SELL_BAG: int = 150
+
+# --- Material, Verschrotten, Reparieren (Abschnitt 26) ---
+## Material zu Beginn eines Laufs und für jede geschaffte Welle.
+const MATERIAL_START: int = 3
+const MATERIAL_PER_WAVE: int = 2
+## Reparatur eines kaputten Gegenstands, je Rarität (Index 0 = Gewöhnlich).
+const REPAIR_COST: Array[int] = [1, 2, 3, 4, 5]
+## Material fürs Verschrotten, je Rarität. Ein Rucksack-Teil gibt SCRAP_YIELD_BAG.
+const SCRAP_YIELD: Array[int] = [1, 2, 3, 4, 6]
+const SCRAP_YIELD_BAG: int = 1
 ## Kisten: Wurde so viele Kisten lang kein Rucksack-Teil angeboten, enthält die nächste sicher
 ## eines (solange im Raster noch Platz ist).
 const CHEST_BAG_PITY: int = 2

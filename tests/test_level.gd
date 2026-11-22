@@ -4,7 +4,9 @@ extends SceneTree
 ## geschlossene Tür, jeder offene Raum von der Bühne erreichbar und umgekehrt), Sperre der
 ## Zombie-Gänge für den Spieler, Bühnentreppe, Türkauf (zu wenig und genug Punkte),
 ## Verbindungstüren zwischen zwei Räumen, Rundweg, Boden unter jedem begehbaren Fleck, neuer Lauf.
-## Wandkäufe gibt es nicht mehr.
+## Wandkäufe gibt es nicht mehr. Dazu Licht und Umgebung: Zahl der Lichter je Zustand unter der
+## Grenze des Renderers, höchstens 8 Lichter je großem Mesh, Lichter geschlossener Räume aus,
+## Applaus-Schild bei geschaffter Welle, rotes Warnlicht bei Wellenbeginn.
 ##
 ## Der Spieler ist ein Ersatz (FakePlayer), damit der Test nicht vom Stand des Spieler-Moduls
 ## abhängt. Skripte, die Game oder Events benutzen, werden erst zur Laufzeit mit load() geholt
@@ -38,6 +40,22 @@ const ROOM_SPAWNS: int = 2
 const GRID: float = 0.25
 ## Wanddicke des Levels: So weit darf ein begehbarer Fleck über die Innenmaße hinausragen (Türöffnung).
 const WALL: float = 0.4
+## Grenzen des Compatibility-Renderers: so viele Punktlichter und Scheinwerfer je Bild und je Mesh.
+const RENDERER_LIGHTS: int = 32
+const RENDERER_LIGHTS_PER_MESH: int = 8
+## So viele Lichter müssen für Kisten, Elite-Zombies und Effekte frei bleiben.
+const LIGHT_RESERVE: int = 5
+## Höchstens so viele Lichter brennen, solange noch kein Raum gekauft ist.
+const LIGHTS_AT_START: int = 15
+## Lichter je offenem Raum (Deckenlicht "RoomLight" und zwei Akzente).
+const ROOM_LIGHTS: int = 3
+## Ab dieser Kantenlänge in Metern zählt ein Mesh als groß.
+const LARGE_MESH: float = 3.0
+## Render-Ebenen des Levels: Spieler und Zombies, Böden (nur sie bekommen das Licht mit Schatten).
+const LAYER_ACTORS: int = 1
+const LAYER_FLOOR: int = 8
+## Dichte des Dunsts je Meter, bis zu der Zombies in 20 m noch klar zu sehen sind.
+const FOG_DENSITY_MAX: float = 0.02
 
 
 ## Ersatz-Spieler: ein Körper mit der Maske des echten Spielers. Die Tür braucht von ihm nichts weiter.
@@ -115,6 +133,9 @@ func _run() -> void:
 			_test_no_wall_buys()
 			_test_rooms_and_doors()
 			_test_spawn_markers()
+			_test_environment()
+			_test_lighting([], "Alle Räume zu")
+			await _test_show_lights()
 			await _test_player_spawn_free()
 			await _test_navigation_closed()
 			await _test_player_block()
@@ -730,6 +751,7 @@ func _test_room_purchases() -> void:
 
 func _test_all_open() -> void:
 	var rooms: Array = _info["rooms"]
+	_test_lighting([2, 3, 4, 5], "Alle Räume offen")
 	# Rundweg je Seite: Bühne - vorderer Raum - Verbindungstür - hinterer Raum - Bühne. Der Weg
 	# durch die Verbindungstür ist kürzer als der Umweg über die Bühne.
 	for pair: Array in [[0, 2, "LinkEast"], [1, 3, "LinkWest"]]:
@@ -1011,6 +1033,203 @@ func _zombies_reach(zombie_script: GDScript, bait: Bait, starts: Array, label: S
 	await physics_frame
 
 
+# --- Licht und Umgebung ---
+
+## Alle Lichter unter dem Level (auch ausgeblendete).
+func _level_lights() -> Array[Light3D]:
+	var result: Array[Light3D] = []
+	var open: Array[Node] = [_level]
+	while not open.is_empty():
+		var node: Node = open.pop_back()
+		if node is Light3D:
+			result.append(node as Light3D)
+		open.append_array(node.get_children())
+	return result
+
+
+## Quader, in dem ein Punktlicht oder Scheinwerfer wirkt (so ordnet der Renderer Lichter den Meshes zu).
+func _light_bounds(light: Light3D) -> AABB:
+	if light is OmniLight3D:
+		var reach: float = (light as OmniLight3D).omni_range
+		return AABB(light.global_position - Vector3.ONE * reach, Vector3.ONE * reach * 2.0)
+	var spot: SpotLight3D = light as SpotLight3D
+	var length: float = spot.spot_range
+	var half: float = tan(deg_to_rad(spot.spot_angle)) * length
+	return spot.global_transform * AABB(Vector3(-half, -half, -length), Vector3(half * 2.0, half * 2.0, length))
+
+
+func _test_environment() -> void:
+	var world: WorldEnvironment = _level.get_node_or_null("Environment") as WorldEnvironment
+	_check(world != null and world.environment != null, "Das Level hat eine Umgebung (Level/Environment).")
+	if world == null or world.environment == null:
+		return
+	var environment: Environment = world.environment
+	_check(environment.ambient_light_source == Environment.AMBIENT_SOURCE_COLOR and environment.ambient_light_energy > 0.1,
+			"Die Umgebung gibt ein farbiges Grundlicht (kein Raum ist völlig schwarz).")
+	_check(environment.tonemap_mode != Environment.TONE_MAPPER_LINEAR, "Die Umgebung hat eine Tonwert-Kurve.")
+	_check(environment.adjustment_enabled, "Helligkeit, Kontrast und Sättigung sind eingestellt.")
+	_check(environment.glow_enabled and environment.glow_hdr_threshold >= 1.0,
+			"Glühen ist an und trifft nur Farben über 1,0 (Lampen und Schilder, keine beleuchteten Flächen).")
+	_check(environment.fog_enabled and environment.fog_density > 0.0 and environment.fog_density <= FOG_DENSITY_MAX,
+			"Dunst ist an und dünn genug für die Sicht auf Zombies (Dichte %.3f, höchstens %.3f)." % [environment.fog_density, FOG_DENSITY_MAX])
+	_check(not environment.ssao_enabled and not environment.volumetric_fog_enabled and not environment.sdfgi_enabled,
+			"Teure oder im Compatibility-Renderer wirkungslose Effekte sind aus (SSAO, Volumen-Nebel, SDFGI).")
+
+
+## Prüft die Lichter für den Zustand, in dem genau die Räume in open_zones gekauft sind.
+func _test_lighting(open_zones: Array, label: String) -> void:
+	var lights_root: Node = _level.get_node_or_null("Lights")
+	_check(lights_root != null, "%s: Es gibt den Knoten Level/Lights." % label)
+	var directional: Array[DirectionalLight3D] = []
+	var placed: Array[Light3D] = []
+	var lit: Array[Light3D] = []
+	for light: Light3D in _level_lights():
+		if light is DirectionalLight3D:
+			directional.append(light as DirectionalLight3D)
+			continue
+		placed.append(light)
+		if light.is_visible_in_tree():
+			lit.append(light)
+		_check(not light.shadow_enabled, "%s: %s wirft keine Schatten (Punktlichter mit Schatten kosten je Mesh einen Durchgang)." % [label, light.name])
+
+	# Gerichtete Lichter: eines für Spieler und Zombies, genau eines mit Schatten und nur für die Böden.
+	var with_shadow: Array[DirectionalLight3D] = []
+	var for_actors: int = 0
+	for light: DirectionalLight3D in directional:
+		if light.shadow_enabled:
+			with_shadow.append(light)
+		elif (light.light_cull_mask & LAYER_ACTORS) != 0:
+			for_actors += 1
+	_check(directional.size() <= 8, "%s: Höchstens 8 gerichtete Lichter (sind %d)." % [label, directional.size()])
+	_check(for_actors >= 1, "%s: Spieler und Zombies (Render-Ebene 1) haben ein eigenes Hauptlicht ohne Schatten." % label)
+	_check(with_shadow.size() == 1, "%s: Genau ein Licht wirft Schatten (sind %d)." % [label, with_shadow.size()])
+	if with_shadow.size() == 1:
+		_check(with_shadow[0].light_cull_mask == LAYER_FLOOR, "%s: Das Schattenlicht trifft nur die Böden (Render-Ebene %d)." % [label, LAYER_FLOOR])
+	var floor_tiles: int = 0
+	for child: Node in _level.get_node("Zone1/Floor").get_children():
+		if child is MeshInstance3D:
+			floor_tiles += 1
+			_check((child as MeshInstance3D).layers == LAYER_FLOOR, "%s: Bodenstück %s der Bühne liegt auf der Boden-Ebene." % [label, child.name])
+	_check(floor_tiles >= 12, "%s: Der Bühnenboden besteht aus mindestens 12 Mesh-Stücken (sind %d)." % [label, floor_tiles])
+
+	# Zahl der Lichter: unter der Grenze des Renderers, mit Luft für Kisten, Elite-Zombies und Effekte.
+	var limit: int = RENDERER_LIGHTS - LIGHT_RESERVE
+	_check(lit.size() <= limit, "%s: Es brennen höchstens %d Punktlichter und Scheinwerfer (sind %d)." % [label, limit, lit.size()])
+	_check(placed.size() <= limit, "%s: Das Level hat insgesamt höchstens %d Punktlichter und Scheinwerfer (sind %d)." % [label, limit, placed.size()])
+	if open_zones.is_empty():
+		_check(lit.size() <= LIGHTS_AT_START, "%s: Ohne gekauften Raum brennen höchstens %d Lichter (sind %d)." % [label, LIGHTS_AT_START, lit.size()])
+	var spots: int = 0
+	for light: Light3D in lit:
+		if light is SpotLight3D:
+			spots += 1
+	_check(spots >= 6, "%s: Auf der Bühne brennen mindestens 6 Scheinwerfer (farbige und Lichtinseln, sind %d)." % [label, spots])
+
+	# Je Raum: Lichter nur an, wenn er gekauft ist. Ein Licht gehört zu dem Raum, in dem es hängt.
+	var in_rooms: int = 0
+	for entry: Variant in _info["rooms"]:
+		var room: Dictionary = entry
+		var zone: int = int(room["zone"])
+		var title: String = String(room["name"])
+		var rect: Rect2 = _zone_rect(zone)
+		var burning: int = 0
+		var total: int = 0
+		var has_main: bool = false
+		for light: Light3D in placed:
+			if not rect.has_point(Vector2(light.global_position.x, light.global_position.z)):
+				continue
+			total += 1
+			if light.is_visible_in_tree():
+				burning += 1
+				has_main = has_main or String(light.name).begins_with("RoomLight")
+		in_rooms += total
+		_check(total == ROOM_LIGHTS, "%s: %s hat %d Lichter (sind %d)." % [label, title, ROOM_LIGHTS, total])
+		if open_zones.has(zone):
+			_check(burning == total and has_main, "%s: Im offenen Raum %s brennen alle Lichter samt Deckenlicht (%d von %d)." % [label, title, burning, total])
+		else:
+			_check(burning == 0, "%s: Im geschlossenen Raum %s brennt kein Licht (sind %d)." % [label, title, burning])
+	# Was in keinem Raum hängt, gehört zur Bühne (samt Publikum und Gängen) und ist immer an.
+	var on_stage: int = placed.size() - in_rooms
+	_check(lit.size() == on_stage + ROOM_LIGHTS * open_zones.size(), "%s: Es brennen die %d Lichter der Bühne und je offenem Raum %d (sind %d)." % [
+			label, on_stage, ROOM_LIGHTS, lit.size()])
+
+	# Höchstens 8 Lichter je großem, beleuchtetem Mesh (sonst lässt der Renderer welche weg).
+	var bounds: Array[AABB] = []
+	for light: Light3D in lit:
+		bounds.append(_light_bounds(light))
+	var worst: int = 0
+	var worst_path: String = ""
+	var large: int = 0
+	var open: Array[Node] = [_level]
+	while not open.is_empty():
+		var node: Node = open.pop_back()
+		open.append_array(node.get_children())
+		var mesh: MeshInstance3D = node as MeshInstance3D
+		if mesh == null or mesh.mesh == null or not mesh.is_visible_in_tree():
+			continue
+		var material: BaseMaterial3D = mesh.material_override as BaseMaterial3D
+		if material == null and mesh.mesh.get_surface_count() > 0:
+			material = mesh.mesh.surface_get_material(0) as BaseMaterial3D
+		if material == null or material.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED:
+			continue
+		var box: AABB = mesh.global_transform * mesh.mesh.get_aabb()
+		if box.get_longest_axis_size() < LARGE_MESH:
+			continue
+		large += 1
+		var count: int = 0
+		for area: AABB in bounds:
+			if area.intersects(box):
+				count += 1
+		if count > RENDERER_LIGHTS_PER_MESH:
+			print("  %d Lichter auf %s (Maße %s)" % [count, String(_level.get_path_to(mesh)), str(box.size.snapped(Vector3.ONE * 0.1))])
+		if count > worst:
+			worst = count
+			worst_path = String(_level.get_path_to(mesh))
+	print("%s: %d Lichter an (%d gesetzt, %d in Räumen), %d große Meshes, höchstens %d Lichter je Mesh (%s)." % [
+			label, lit.size(), placed.size(), in_rooms, large, worst, worst_path])
+	_check(large > 40, "%s: Es gibt große beleuchtete Meshes zu prüfen (sind %d)." % [label, large])
+	_check(worst <= RENDERER_LIGHTS_PER_MESH, "%s: Auf kein großes Mesh fallen mehr als %d Lichter (%d auf %s)." % [
+			label, RENDERER_LIGHTS_PER_MESH, worst, worst_path])
+
+
+## Lebendigkeit: Applaus-Schild bei geschaffter Welle, rotes Warnlicht bei Wellenbeginn, danach
+## wieder der Ruhezustand.
+func _test_show_lights() -> void:
+	var show: Node = _level.get_node_or_null("Show")
+	var label: Label3D = show.get("applause_label") as Label3D if show != null else null
+	var pools: Array = show.get("pools") if show != null and show.get("pools") is Array else []
+	_check(label != null, "Es gibt das Applaus-Schild.")
+	_check(pools.size() >= 2, "Die Bühne hat mindestens zwei Lichtinseln (sind %d)." % pools.size())
+	if label == null or pools.is_empty():
+		return
+	var pool: SpotLight3D = pools[0] as SpotLight3D
+	for i: int in range(3):
+		await process_frame
+	var idle: Color = label.modulate
+	var calm: Color = pool.light_color
+	_check(idle.r < 1.0 and idle.g < 1.0, "Im Ruhezustand ist das Applaus-Schild dunkel.")
+
+	_events.emit_signal("wave_cleared", 1)
+	for i: int in range(3):
+		await process_frame
+	_check(label.modulate.r > 1.0 and label.modulate.r > idle.r + 0.5, "Bei geschaffter Welle leuchtet das Applaus-Schild auf (Farbe über 1,0, es glüht).")
+	_check(pool.light_color.is_equal_approx(calm), "Der Applaus färbt die Lichtinseln nicht um.")
+
+	_events.emit_signal("wave_started", 2, 10)
+	var reddest: float = calm.g
+	var deadline: int = Time.get_ticks_msec() + 10000
+	while float(show.get("_alert_left")) > 0.0 and Time.get_ticks_msec() < deadline:
+		await process_frame
+		reddest = minf(reddest, pool.light_color.g)
+	_check(reddest < calm.g - 0.3, "Bei Wellenbeginn färben sich die Lichtinseln rot (Grünanteil fiel von %.2f auf %.2f)." % [calm.g, reddest])
+	_check(float(show.get("_alert_left")) <= 0.0, "Das Warnlicht endet von selbst.")
+	for i: int in range(2):
+		await process_frame
+	_check(pool.light_color.is_equal_approx(calm), "Nach dem Warnlicht haben die Lichtinseln wieder ihre Farbe.")
+	_check(label.modulate.is_equal_approx(idle), "Mit der nächsten Welle ist das Applaus-Schild wieder dunkel.")
+	_check(absf(pool.light_energy - float(pools[pools.size() - 1].light_energy)) < 0.001 and pool.light_energy > 0.5,
+			"Die Lichtinseln flackern nicht: Ihre Helligkeit bleibt gleich.")
+
+
 # --- Neuer Lauf: alles wieder zu ---
 
 func _test_new_run() -> void:
@@ -1026,6 +1245,7 @@ func _test_new_run() -> void:
 	_check(not bool(link_east.get("is_open")) and not bool(link_west.get("is_open")), "Die Verbindungstüren sind wieder zu.")
 	_check_active_zones([], "Nach run_started")
 	await _check_rooms_reachable([], "Neuer Lauf")
+	_test_lighting([], "Neuer Lauf")
 	var space: PhysicsDirectSpaceState3D = _level.get_world_3d().direct_space_state
 	for i: int in range(ROOMS.size()):
 		var door: StaticBody3D = _door_of(i)
@@ -1044,6 +1264,7 @@ func _test_new_run() -> void:
 			"Von der Garderobe aus verkauft die Verbindungstür den Backstage für %d." % Balance.DOOR_COST)
 	_check_active_zones([4], "Nur Garderobe offen")
 	await _check_rooms_reachable([4], "Nur Garderobe offen")
+	_test_lighting([4], "Nur Garderobe offen")
 	_game.call("add_points", Balance.DOOR_COST)
 	_banners.clear()
 	link_east.call("interact", null)

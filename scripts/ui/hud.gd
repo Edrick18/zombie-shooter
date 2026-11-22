@@ -2,18 +2,20 @@ extends CanvasLayer
 ## Modul: Oberfläche (scripts/ui).
 ## HUD während des Spiels (Abschnitt 11): Lebensbalken, Schild, Ausweichsprünge und Ladungen der
 ## Zweiten Staffel (nur mit Sicherheitsglas, Notausgang bzw. Zweiter Staffel, Abschnitte 19.2 und
-## 22.3), Punkte, Welle und verbleibende Zombies, Waffe und Munition, Fadenkreuz, Treffermarker,
-## Interaktions-Hinweis, Buff-Anzeige (Boni, Verbindungen und die Kameras im Spiel), Banner,
-## roter Rand bei Schaden, Countdown zwischen den Wellen.
+## 22.3), Punkte, darunter klein das Material des Laufs (Abschnitt 26) mit kurzem "+2" beim
+## Zuwachs, Welle und verbleibende Zombies, Waffe und Munition, Fadenkreuz, Treffermarker,
+## Interaktions-Hinweis, Buff-Anzeige (Boni, Verbindungen und die Kameras im Spiel mit ihrem Bild
+## aus ItemIcons), Banner, roter Rand bei Schaden, Countdown zwischen den Wellen.
 ##
 ## Das HUD liest nur: Es hört auf Events und fragt Namen und Texte bei UpgradeDefs und WeaponDefs
 ## ab. Bei run_started stellt es alles auf Anfang und holt sich Leben und Waffe vom Spieler,
 ## falls es ihn gibt (ohne Spieler zeigt es die Startwerte).
 ##
 ## Diese Datei enthält außerdem den gemeinsamen Gameshow-Stil aller vier Bildschirme: Farben,
-## statische Helfer (make_label, make_box, make_button, make_headline ...) und kleine gezeichnete
-## Bausteine (SlantBar, UpgradeIcon, Pips, Sunburst). Kistenwahl, Pausemenü und Game Over binden
-## sie ein mit: const UiStyle := preload("res://scripts/ui/hud.gd")
+## statische Helfer (make_label, make_box, make_button, make_headline, draw_gear, draw_wrench
+## ...) und kleine gezeichnete Bausteine (SlantBar, UpgradeIcon, ItemIcon,
+## MaterialIcon, Pips, Sunburst). Kistenwahl, Pausemenü und Game Over binden sie ein mit:
+## const UiStyle := preload("res://scripts/ui/hud.gd")
 
 const Balance := preload("res://scripts/core/balance.gd")
 const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
@@ -112,6 +114,15 @@ const HAND_BOX_WIDTH_ONE: float = 400.0
 const HAND_BOX_WIDTH_TWO: float = 200.0
 const HAND_BOX_GAP: float = 26.0
 const HAND_SIDE_TEXTS: Array[String] = ["LINKS", "RECHTS"]
+## Material (Abschnitt 26): Farbe der Anzeige, Maße der kleinen Zeile unter den Punkten und so
+## lange steht das "+2" nach einem Zuwachs (Sekunden).
+const MATERIAL_COLOR: Color = Color(0.55, 0.9, 1.0)
+const MATERIAL_ROW_TOP: float = 104.0
+const MATERIAL_ROW_SIZE: Vector2 = Vector2(260.0, 26.0)
+const MATERIAL_ICON_SIZE: float = 22.0
+const MATERIAL_FONT_SIZE: int = 18
+const MATERIAL_GAIN_HOLD: float = 1.1
+const MATERIAL_GAIN_FADE: float = 0.5
 
 static var _font_cache: Dictionary = {}
 
@@ -147,6 +158,22 @@ static func clear_font_cache() -> void:
 ## Gibt es für diese ID ein gezeichnetes Bild (UpgradeIcon)?
 static func has_icon(icon_id: String) -> bool:
 	return ICON_IDS.has(icon_id)
+
+
+## Zeichnet ein Zahnrad (Zeichen für Material) um center. hole_color füllt das Loch in der Mitte.
+static func draw_gear(canvas: CanvasItem, center: Vector2, radius: float, color: Color, hole_color: Color = COL_INK) -> void:
+	MaterialIcon.draw_gear_on(canvas, center, radius, color, hole_color)
+
+
+## Zeichnet einen Schraubenschlüssel (Zeichen für Reparieren) schräg in ein Quadrat der Kantenlänge
+## extent um center. notch_color füllt das Maul des Schlüssels (die Farbe des Hintergrunds).
+static func draw_wrench(canvas: CanvasItem, center: Vector2, extent: float, color: Color, notch_color: Color = COL_INK) -> void:
+	var head: Vector2 = center + Vector2(0.24, -0.24) * extent
+	var foot: Vector2 = center + Vector2(-0.36, 0.36) * extent
+	canvas.draw_line(foot, head, color, maxf(2.0, extent * 0.2))
+	canvas.draw_circle(foot, maxf(1.0, extent * 0.1), color)
+	canvas.draw_circle(head, extent * 0.26, color)
+	canvas.draw_circle(head + Vector2(0.14, -0.14) * extent, extent * 0.14, notch_color)
 
 
 ## Setzt Schrift, Größe, Farbe, dunklen Rand und Schatten eines Labels.
@@ -642,6 +669,76 @@ class ItemShape:
 				draw_rect(Rect2(rect.position + Vector2(3.0, 3.0), Vector2(rect.size.x - 6.0, rect.size.y * 0.28)), fill.lightened(0.45))
 
 
+## Bild eines Gegenstands aus ItemIcons (Abschnitt 26.2) auf einem dunklen Feld.
+class ItemIcon:
+	extends Control
+
+	## ID aus ItemDefs.
+	var item_id: String = "":
+		set(value):
+			item_id = value
+			queue_redraw()
+	## Färbt das ganze Bild (z. B. grau für kaputt).
+	var tint: Color = Color.WHITE:
+		set(value):
+			tint = value
+			queue_redraw()
+	## Wie oft das Bild gezeichnet wurde (für Tests).
+	var draw_count: int = 0
+
+	## Pfad der Bilder-Datei. Erst beim Zeichnen geladen: So hängt hud.gd nicht an der
+	## Bilder-Datei (und umgekehrt).
+	const ICONS_PATH: String = "res://scripts/ui/item_icons.gd"
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		if size.x < 4.0 or size.y < 4.0 or item_id.is_empty():
+			return
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.06, 0.03, 0.13))
+		draw_count += 1
+		var icons: GDScript = load(ICONS_PATH) as GDScript
+		if icons != null:
+			icons.call("draw", self, item_id, Rect2(Vector2.ZERO, size), tint)
+
+
+## Zahnrad als kleines Bild: das Zeichen für Material (HUD und Rucksack).
+class MaterialIcon:
+	extends Control
+
+	## Zahl der Zähne.
+	const TEETH: int = 8
+
+	var color: Color = Color(0.55, 0.9, 1.0):
+		set(value):
+			color = value
+			queue_redraw()
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var radius: float = minf(size.x, size.y) * 0.5
+		if radius < 3.0:
+			return
+		var ink: Color = Color(0.06, 0.03, 0.13)
+		draw_gear_on(self, size * 0.5 + Vector2(0.0, 1.5), radius, ink, ink)
+		draw_gear_on(self, size * 0.5, radius - 1.5, color, ink)
+
+	## Zeichnet ein Zahnrad um center (siehe draw_gear außen).
+	static func draw_gear_on(canvas: CanvasItem, center: Vector2, radius: float, gear_color: Color, hole_color: Color) -> void:
+		var points: PackedVector2Array = PackedVector2Array()
+		var steps: int = TEETH * 4
+		for i: int in steps:
+			# Je Zahn vier Punkte: zwei außen (Zahn), zwei innen (Lücke).
+			var outer: bool = i % 4 < 2
+			var angle: float = TAU * (float(i) - 0.5) / float(steps)
+			points.append(center + Vector2.from_angle(angle) * radius * (1.0 if outer else 0.72))
+		canvas.draw_colored_polygon(points, gear_color)
+		canvas.draw_circle(center, radius * 0.32, hole_color)
+
+
 ## IDs, für die UpgradeIcon ein eigenes Bild zeichnet. Alle anderen Gegenstände zeigen ihre Form.
 const ICON_IDS: Array[String] = [
 	"chain_lightning", "pierce", "burn", "lifesteal", "max_hp",
@@ -905,6 +1002,11 @@ var zombies_label: Label
 var points_label: Label
 ## Behälter der schwebenden "+60"-Anzeigen (je Anzeige ein Label).
 var floaters: Control
+## Material des Laufs, klein unter den Punkten: "MATERIAL 3" mit Zahnrad davor.
+var material_label: Label
+var material_icon: MaterialIcon
+## "+2" links neben dem Material, nur kurz nach einem Zuwachs zu sehen.
+var material_gain_label: Label
 ## Aktuelles Leben als ganze Zahl.
 var health_label: Label
 ## "/ 100".
@@ -1151,11 +1253,42 @@ func _build_points() -> void:
 	points_label.pivot_offset_ratio = Vector2(1.0, 0.5)
 	anchor_box(points_label, Vector2(1.0, 0.0), Vector2(-MARGIN - 400.0, 40.0), Vector2(400.0, 66.0))
 	root.add_child(points_label)
+	_build_material()
 	floaters = Control.new()
 	floaters.name = "Floaters"
 	floaters.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	anchor_box(floaters, Vector2(1.0, 0.0), Vector2(-MARGIN - 400.0, 104.0), Vector2(400.0, 90.0))
+	# Die schwebenden Zahlen beginnen unter der Zeile mit dem Material.
+	anchor_box(floaters, Vector2(1.0, 0.0), Vector2(-MARGIN - 400.0, MATERIAL_ROW_TOP + MATERIAL_ROW_SIZE.y + 2.0), Vector2(400.0, 90.0))
 	root.add_child(floaters)
+
+
+## Material klein unter den Punkten: von links "+2" (nur kurz), Zahnrad, "MATERIAL 3".
+func _build_material() -> void:
+	var row: HBoxContainer = HBoxContainer.new()
+	row.name = "MaterialRow"
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 6)
+	anchor_box(row, Vector2(1.0, 0.0), Vector2(-MARGIN - MATERIAL_ROW_SIZE.x, MATERIAL_ROW_TOP), MATERIAL_ROW_SIZE)
+	root.add_child(row)
+	material_gain_label = make_label("", MATERIAL_FONT_SIZE, COL_GREEN, true)
+	material_gain_label.name = "MaterialGain"
+	material_gain_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	material_gain_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	material_gain_label.modulate.a = 0.0
+	row.add_child(material_gain_label)
+	material_icon = MaterialIcon.new()
+	material_icon.name = "MaterialIcon"
+	material_icon.color = MATERIAL_COLOR
+	material_icon.custom_minimum_size = Vector2(MATERIAL_ICON_SIZE, MATERIAL_ICON_SIZE)
+	material_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(material_icon)
+	material_label = make_label("MATERIAL 0", MATERIAL_FONT_SIZE, MATERIAL_COLOR, true)
+	material_label.name = "Material"
+	material_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	material_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	material_label.pivot_offset_ratio = Vector2(1.0, 0.5)
+	row.add_child(material_label)
 
 
 func _build_health() -> void:
@@ -1452,6 +1585,7 @@ func _connect_events() -> void:
 	Events.run_started.connect(_on_run_started)
 	Events.game_over.connect(_on_game_over)
 	Events.points_changed.connect(_on_points_changed)
+	Events.materials_changed.connect(_on_materials_changed)
 	Events.banner.connect(_on_banner)
 	Events.wave_started.connect(_on_wave_started)
 	Events.wave_cleared.connect(_on_wave_cleared)
@@ -1495,6 +1629,7 @@ func _reset() -> void:
 	_gain_left = 0.0
 	_shown_points = Game.points
 	points_label.text = format_int(_shown_points)
+	_set_material(Game.materials, 0)
 	_wave = 0
 	wave_label.text = "SHOWSTART"
 	_set_zombies_text("GLEICH GEHT'S LOS", COL_WHITE)
@@ -1617,6 +1752,32 @@ func _flush_point_gain() -> void:
 	style_label(_gain_label, 34 if big else 26, color, true)
 	_run_floater(_gain_label, GAIN_COMBO_WINDOW, -30.0)
 	pop(points_label, 1.28 if gain >= Balance.POINTS_ELITE_KILL else 1.14, 0.2)
+
+
+## Material hat sich geändert (Events.materials_changed): neuer Stand und Änderung.
+func _on_materials_changed(total: int, delta: int) -> void:
+	_set_material(total, delta)
+
+
+## Zeigt den Stand des Materials. Bei einem Zuwachs steht kurz "+2" daneben und die Zahl ploppt,
+## bei delta 0 (neuer Lauf) verschwindet ein altes "+2" sofort.
+func _set_material(total: int, delta: int) -> void:
+	material_label.text = "MATERIAL %s" % format_int(total)
+	kill_tween(material_gain_label, "gain_tween")
+	if delta <= 0:
+		material_gain_label.modulate.a = 0.0
+		if delta < 0:
+			pop(material_label, 0.85, 0.2)
+		return
+	material_gain_label.text = "+%s" % format_int(delta)
+	material_gain_label.modulate.a = 1.0
+	pop(material_label, 1.3, 0.25)
+	if not is_inside_tree():
+		return
+	var tween: Tween = material_gain_label.create_tween()
+	tween.tween_interval(MATERIAL_GAIN_HOLD)
+	tween.tween_property(material_gain_label, "modulate:a", 0.0, MATERIAL_GAIN_FADE)
+	material_gain_label.set_meta("gain_tween", tween)
 
 
 func _spawn_spend_floater(amount: int) -> void:
@@ -2230,18 +2391,12 @@ func _rebuild_buffs() -> void:
 		index += 1
 
 
-## Kleines Bild einer Kamera: das gezeichnete Symbol, sonst ihre Form im Rucksack.
+## Kleines Bild einer Kamera: ihr Bild aus ItemIcons, dasselbe wie im Rucksack.
 func _make_camera_icon(camera_id: String) -> Control:
-	if has_icon(camera_id):
-		var icon: UpgradeIcon = UpgradeIcon.new()
-		icon.name = "Icon"
-		icon.icon_id = camera_id
-		return icon
-	var shape: ItemShape = ItemShape.new()
-	shape.name = "Icon"
-	shape.item_id = camera_id
-	shape.max_cell = 9.0
-	return shape
+	var icon: ItemIcon = ItemIcon.new()
+	icon.name = "Icon"
+	icon.item_id = camera_id
+	return icon
 
 
 # --- Banner ---------------------------------------------------------------------------

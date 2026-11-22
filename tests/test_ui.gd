@@ -10,6 +10,7 @@ const Balance := preload("res://scripts/core/balance.gd")
 const ChestRoller := preload("res://scripts/core/chest_roller.gd")
 const UpgradeDefs := preload("res://scripts/core/upgrade_defs.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
+const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
 const STATE_PLAYING: int = 1
 const STATE_CHOOSING: int = 2
@@ -267,6 +268,32 @@ func _test_hud() -> void:
 	_events.emit_signal("points_changed", 12340)
 	_equal(_label(hud, "points_label").text, "12.340", "Große Punktzahlen mit Tausenderpunkt.")
 
+	# Material (Abschnitt 26): klein unter den Punkten, mit kurzem "+2" beim Zuwachs.
+	var material_label: Label = _label(hud, "material_label")
+	var material_gain: Label = _label(hud, "material_gain_label")
+	var material_icon: Control = _control(hud, "material_icon")
+	_equal(material_label.text, "MATERIAL %d" % Balance.MATERIAL_START, "Das HUD zeigt das Material des Laufs.")
+	_check(is_zero_approx(material_gain.modulate.a), "Ohne Zuwachs ist kein +N zu sehen.")
+	_game.call("add_materials", 2)
+	_equal(material_label.text, "MATERIAL %d" % (Balance.MATERIAL_START + 2), "Das Material im HUD folgt materials_changed.")
+	_check(material_gain.text == "+2" and material_gain.modulate.a > 0.9, "Beim Zuwachs steht kurz +2 daneben, war: " + material_gain.text)
+	await _frames(2)
+	var material_rect: Rect2 = material_label.get_global_rect()
+	var points_rect: Rect2 = _label(hud, "points_label").get_global_rect()
+	_check(material_rect.position.y >= points_rect.get_center().y and material_rect.end.x <= points_rect.end.x + 1.0 and material_rect.size.x > 40.0,
+		"Das Material steht rechts unter den Punkten.")
+	_check(material_label.get_theme_font_size("font_size") * 2 < _label(hud, "points_label").get_theme_font_size("font_size"), "Das Material ist klein neben dem Punktestand.")
+	_check(material_icon.get_global_rect().end.x <= material_rect.position.x + 0.5 and material_icon.size.x >= 16.0, "Vor dem Material steht sein Zeichen, das Zahnrad.")
+	_check(material_gain.get_global_rect().end.x <= material_icon.get_global_rect().position.x + 0.5, "Das +2 steht links daneben.")
+	_check(_control(hud, "floaters").get_global_rect().position.y >= material_rect.end.y - 4.0, "Die schwebenden Punkte beginnen unter dem Material.")
+	_check(root.get_visible_rect().encloses(material_rect), "Das Material liegt im Bild.")
+	_events.emit_signal("materials_changed", 1, -4)
+	_check(material_label.text == "MATERIAL 1" and is_zero_approx(material_gain.modulate.a), "Ausgegebenes Material geht ab, ohne +N.")
+	_events.emit_signal("materials_changed", 1234, 3)
+	_check(material_label.text == "MATERIAL 1.234" and material_gain.text == "+3", "Viel Material steht mit Tausenderpunkt da.")
+	_events.emit_signal("materials_changed", int(_game.get("materials")), 0)
+	_check(material_label.text == "MATERIAL %d" % (Balance.MATERIAL_START + 2) and is_zero_approx(material_gain.modulate.a), "Eine Meldung ohne Änderung setzt die Anzeige zurück.")
+
 	# Welle, Zombies, Countdown.
 	_events.emit_signal("intermission_tick", 4)
 	_check(_control(hud, "countdown_box").visible, "Countdown erscheint bei intermission_tick.")
@@ -441,6 +468,11 @@ func _test_hud() -> void:
 	_equal(_text(buff_rows, "Buff_camera_drone/Text"), "2 × %s" % ItemDefs.display_name("drone"), "Zwei Drohnen stehen als eine Zeile mit Zahl da.")
 	_equal(_text(buff_rows, "Buff_camera_cam_slow/Text"), ItemDefs.display_name("cam_slow"), "Eine einzelne Kamera steht mit ihrem Namen da.")
 	_check(buff_rows.get_node_or_null("Buff_camera_drone/Icon") != null, "Die Kamera-Zeile zeigt ein Bild.")
+	# Das Bild kommt aus ItemIcons (dasselbe wie im Rucksack) und wird wirklich gezeichnet.
+	var camera_icon: Control = buff_rows.get_node_or_null("Buff_camera_drone/Icon") as Control
+	_check(camera_icon != null and str(camera_icon.get("item_id")) == "drone" and ItemIcons.has("drone"), "Die Kamera-Zeile zeigt das Bild der Kameradrohne aus ItemIcons.")
+	await _frames(2)
+	_check(camera_icon != null and int(camera_icon.get("draw_count")) >= 1 and camera_icon.size.x >= 16.0, "Das Bild der Kamera wird gezeichnet.")
 	var camera_text: Label = buff_rows.get_node("Buff_camera_cam_slow/Text") as Label
 	_check(prompt_font.get_string_size(camera_text.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, camera_text.get_theme_font_size("font_size")).x <= camera_text.size.x + 0.5,
 		"Der Name der Kamera passt in die Zeile.")
@@ -644,16 +676,16 @@ func _test_chest_choice() -> void:
 		_equal(_text(card, "Key"), str(i + 1), "Karte %d zeigt ihre Taste." % (i + 1))
 		_equal(String(offer.get("kind", "")), "item", "Karte %d ist ein Gegenstand." % (i + 1))
 		_equal(_text(card, "Name"), ChestRoller.offer_title(offer), "Karte %d zeigt den Namen des Gegenstands." % (i + 1))
-		_check(card.get_node_or_null("Icon") != null, "Karte %d hat ein Bild." % (i + 1))
+		var card_icon: Control = card.get_node_or_null("Icon") as Control
+		_check(card_icon is ItemIcons.View and str(card_icon.get("item_id")) == String(offer["id"]), "Karte %d zeigt das Bild ihres Gegenstands." % (i + 1))
+		_check(card.get_node_or_null("Shape") != null, "Karte %d zeigt daneben klein die Form im Rucksack." % (i + 1))
+		_check(card.get_node_or_null("Broken") == null, "Karte %d: Ohne kaputte Fundstücke steht kein Hinweis auf der Karte." % (i + 1))
 		if UpgradeDefs.has(String(offer["id"])):
 			_equal(_text(card, "Level"), "NEU · Ungewöhnlich", "Karte %d: neuer Upgrade-Gegenstand aus der Silber-Kiste." % (i + 1))
 			_equal(_text(card, "Tag"), "UNGEWÖHNLICH", "Karte %d zeigt die Rarität des Gegenstands." % (i + 1))
 			# Der Text des Gegenstands: bei Stern-Gegenständen mit dem Hinweis auf die Sterne.
 			_equal(_plain(_text(card, "Text")), ItemDefs.description(String(offer["id"]), 2), "Karte %d zeigt die Wirkung der Stufe." % (i + 1))
-			# Gegenstände mit gezeichnetem Bild zeigen die Form klein daneben ("Shape"), neuere
-			# Gegenstände ohne Bild zeigen die Form groß als Bild ("Icon").
 			_check(card.get_node_or_null("Pips") != null, "Karte %d zeigt Raritäts-Punkte." % (i + 1))
-			_check(card.get_node_or_null("Shape") != null or card.get_node_or_null("Icon") != null, "Karte %d zeigt die Form." % (i + 1))
 		else:
 			var is_bag: bool = String(offer["id"]).begins_with("bag_")
 			if is_bag:
@@ -762,6 +794,14 @@ func _test_chest_choice() -> void:
 		_equal(_text(cards[2], "Level"), "+50 LEBEN", "Trostpreis zeigt die Heilung.")
 		_equal(_text(cards[2], "Text"), ChestRoller.offer_description(shown[2]), "Trostpreis-Text aus dem ChestRoller.")
 		_check((cards[2] as Node).get_node_or_null("Pips") == null, "Trostpreis hat keine Stufen-Punkte.")
+		# Bilder: Das Upgrade zeigt das Bild seines Gegenstands, Trostpreise ihr eigenes Symbol.
+		var upgrade_icon: Control = (cards[0] as Node).get_node_or_null("Icon") as Control
+		_check(upgrade_icon is ItemIcons.View and str(upgrade_icon.get("item_id")) == "pierce", "Die Upgrade-Karte zeigt das Bild des Gegenstands.")
+		_equal(str(((cards[1] as Node).get_node("Icon") as Control).get("icon_id")), "points", "Der Trostpreis Punkte zeigt sein Symbol.")
+		_equal(str(((cards[2] as Node).get_node("Icon") as Control).get("icon_id")), "heal", "Der Trostpreis Heilung zeigt sein Symbol.")
+		for card_variant: Variant in cards:
+			_check((card_variant as Node).get_node_or_null("Shape") == null, "Upgrades und Trostpreise zeigen keine Form im Rucksack.")
+			_check((card_variant as Node).get_node_or_null("Broken") == null, "Upgrades und Trostpreise kommen nie kaputt an.")
 		# Nichts ragt aus der Karte: Jedes Textfeld liegt innerhalb der Kartengröße.
 		for card_variant: Variant in cards:
 			var card_control: Control = card_variant as Control
@@ -775,7 +815,9 @@ func _test_chest_choice() -> void:
 						"Kartenteil %s bleibt innerhalb der Karte." % part.name)
 	choice.call("close")
 	_check(not bool(choice.call("is_open")), "close schließt ohne Wahl.")
-	await _test_all_item_cards(choice)
+	await _test_all_item_cards(choice, false)
+	await _test_all_item_cards(choice, true)
+	_test_broken_note(choice)
 	choice.call("show_offers", Balance.RARITY_BRONZE, [])
 	_check(not bool(choice.call("is_open")), "Ohne Angebote bleibt die Wahl zu.")
 
@@ -789,11 +831,33 @@ func _test_chest_choice() -> void:
 	_game.set("auto_pack", false)
 
 
-## Die Karte jedes Gegenstands aus ItemDefs.ORDER (64, darunter die Kameras und alles Neue aus
-## Abschnitt 22): Name, Zeile mit Art und Rarität und Wirkungstext passen in ihre Felder, lange
-## Namen brechen nur an Leerzeichen und Bindestrichen um, nichts ragt aus der Karte.
-func _test_all_item_cards(choice: Node) -> void:
+## Der Hinweis auf kaputte Fundstücke als Text (Abschnitt 26.1): Preis der Reparatur je Rarität,
+## nichts bei Rucksack-Teilen, nichts ohne kaputte Fundstücke.
+func _test_broken_note(choice: Node) -> void:
+	for level: int in range(1, 6):
+		_equal(str(choice.call("broken_note", "rifle", level, true)), "Kommt kaputt in die Ablage · Reparatur: %d Material" % Balance.REPAIR_COST[level - 1],
+			"Der Hinweis nennt den Preis der Reparatur für Rarität %d." % level)
+	_equal(str(choice.call("broken_note", "cam_flash", 3, true)), "Kommt kaputt in die Ablage · Reparatur: 3 Material", "Auch eine Kamera kommt kaputt an.")
+	_equal(str(choice.call("broken_note", "replay", 9, true)), "Kommt kaputt in die Ablage · Reparatur: %d Material" % Balance.REPAIR_COST[4], "Eine zu hohe Rarität gilt als Legendär.")
+	_equal(str(choice.call("broken_note", "rifle", 0, true)), "Kommt kaputt in die Ablage · Reparatur: %d Material" % Balance.REPAIR_COST[0], "Eine zu kleine Rarität gilt als Gewöhnlich.")
+	for bag_id: String in ["bag_tiny", "bag_small", "bag_medium", "bag_large"]:
+		_equal(str(choice.call("broken_note", bag_id, 1, true)), "", "Das Rucksack-Teil %s kommt nie kaputt an." % bag_id)
+	_equal(str(choice.call("broken_note", "rifle", 2, false)), "", "Ohne kaputte Fundstücke gibt es keinen Hinweis.")
+	_equal(str(choice.call("broken_note", "gibt_es_nicht", 2, true)), "", "Eine unbekannte ID bekommt keinen Hinweis.")
+	_equal(str(choice.call("broken_note", "", 2, true)), "", "Ohne ID gibt es keinen Hinweis.")
+
+
+## Die Karte jedes Gegenstands aus ItemDefs.ORDER (65, darunter die Kameras und alles Neue aus
+## Abschnitt 22): Bild, Name, Zeile mit Art und Rarität und Wirkungstext passen in ihre Felder,
+## lange Namen brechen nur an Leerzeichen und Bindestrichen um, nichts ragt aus der Karte.
+## broken_loot: Fundstücke kommen kaputt an (Game.broken_loot), dann steht auf jeder Karte außer
+## denen der Rucksack-Teile der Hinweis mit dem Preis der Reparatur.
+func _test_all_item_cards(choice: Node, broken_loot: bool) -> void:
+	var loot_before: Variant = _game.get("broken_loot")
+	_game.set("broken_loot", broken_loot)
+	_equal(_game.get("broken_loot") == true, broken_loot, "Aufbau: Game.broken_loot lässt sich auf %s stellen." % str(broken_loot))
 	var slanted: Font = _hud_script.call("show_font", true) as Font
+	var upright: Font = _hud_script.call("show_font", false) as Font
 	var ids: Array[String] = ItemDefs.all_ids()
 	_equal(ids.size(), 65, "Aufbau: Es gibt 65 Gegenstände.")
 	var seen: int = 0
@@ -813,7 +877,32 @@ func _test_all_item_cards(choice: Node) -> void:
 			seen += 1
 			_equal(_text(card, "Name"), ItemDefs.display_name(id), "Die Karte von %s zeigt den Namen." % id)
 			_equal(_plain(_text(card, "Text")), ItemDefs.description(id, int(offer["level"])), "Die Karte von %s zeigt die Wirkung." % id)
-			_check(card.get_node_or_null("Icon") != null, "Die Karte von %s hat ein Bild oder ihre Form." % id)
+			# Bild: das gezeichnete Bild des Gegenstands, groß und mittig, daneben klein die Form.
+			var icon: Control = card.get_node_or_null("Icon") as Control
+			_check(icon is ItemIcons.View and str(icon.get("item_id")) == id, "Die Karte von %s zeigt das Bild des Gegenstands." % id)
+			_check(icon.size.x >= 96.0 and is_equal_approx(icon.size.x, icon.size.y), "Das Bild von %s ist groß und quadratisch (%s)." % [id, str(icon.size)])
+			_check(absf(icon.position.x + icon.size.x * 0.5 - card.size.x * 0.5) < 0.5, "Das Bild von %s sitzt in der Mitte der Karte." % id)
+			var small_shape: Control = card.get_node_or_null("Shape") as Control
+			_check(small_shape != null and str(small_shape.get("item_id")) == id, "Die Karte von %s zeigt klein die Form im Rucksack." % id)
+			if small_shape != null:
+				_check(small_shape.position.x + small_shape.size.x <= icon.position.x + 0.5, "Die kleine Form von %s steht links neben dem Bild." % id)
+			_check(icon.position.y + icon.size.y <= (card.get_node("Name") as Control).position.y + 0.5, "Das Bild von %s endet über dem Namen." % id)
+			# Hinweis auf kaputte Fundstücke.
+			var note_label: Label = card.get_node_or_null("Broken") as Label
+			var expects_note: bool = broken_loot and not ItemDefs.is_bag(id)
+			_equal(note_label != null, expects_note, "Die Karte von %s zeigt den Hinweis auf die Reparatur genau dann, wenn das Fundstück kaputt ankommt." % id)
+			if note_label != null:
+				_equal(_plain(note_label.text), "Kommt kaputt in die Ablage · Reparatur: %d Material" % Balance.REPAIR_COST[int(offer["level"]) - 1],
+					"Die Karte von %s nennt den Preis der Reparatur." % id)
+				_check(note_label.get_line_count() <= 2, "Der Hinweis von %s braucht höchstens zwei Zeilen." % id)
+				var note_spacing: float = float(note_label.get_theme_constant("line_spacing"))
+				var note_needed: float = float(note_label.get_line_count()) * (float(note_label.get_line_height()) + note_spacing) - note_spacing
+				_check(note_needed <= note_label.size.y + 0.5, "Der Hinweis von %s passt in seinen Streifen (%d von %d)." % [id, roundi(note_needed), roundi(note_label.size.y)])
+				for line: String in note_label.text.split(" · "):
+					_check(upright.get_string_size(line + " ·", HORIZONTAL_ALIGNMENT_LEFT, -1.0, note_label.get_theme_font_size("font_size")).x <= note_label.size.x + 0.5,
+						"Die Zeile „%s“ des Hinweises von %s passt in die Karte." % [line, id])
+				var text_part: Control = card.get_node("Text") as Control
+				_check(text_part.position.y + text_part.size.y <= note_label.position.y + 0.5, "Der Wirkungstext von %s endet über dem Hinweis." % id)
 			# Name: höchstens zwei Zeilen, kein Wort wird mittendrin getrennt.
 			var name_label: Label = card.get_node("Name") as Label
 			var name_size: int = name_label.get_theme_font_size("font_size")
@@ -839,24 +928,20 @@ func _test_all_item_cards(choice: Node) -> void:
 						and part.position.x + part.size.x <= card.size.x + 0.5
 						and part.position.y + part.size.y <= card.size.y + 0.5,
 						"Kartenteil %s von %s bleibt innerhalb der Karte." % [part.name, id])
-			# Der Aufkleber NEU überdeckt das Bild nicht (lange Formen rücken nach links).
+			# Der Aufkleber NEU überdeckt das Bild nicht.
 			var sticker: Control = card.get_node_or_null("NewSticker") as Control
-			var icon: Control = card.get_node("Icon") as Control
-			if sticker != null and int(offer["owned_level"]) <= 0:
-				var drawn_width: float = icon.size.x
-				if icon.get("item_id") != null:
-					drawn_width = minf(float(icon.get("max_cell")), minf(icon.size.x / float(ItemDefs.size(id).x), icon.size.y / float(ItemDefs.size(id).y))) * float(ItemDefs.size(id).x)
-				var drawn_right: float = icon.position.x + (icon.size.x + drawn_width) * 0.5
+			_equal(sticker != null, ItemDefs.has_rarity(id) and int(offer["owned_level"]) <= 0, "Die Karte von %s trägt den Aufkleber NEU genau dann, wenn der Gegenstand neu ist." % id)
+			if sticker != null:
+				var drawn_right: float = icon.position.x + icon.size.x
 				_check(drawn_right <= sticker.position.x + 4.0, "Das Bild von %s endet vor dem Aufkleber NEU (%d vor %d)." % [id, roundi(drawn_right), roundi(sticker.position.x)])
 			if ItemDefs.is_camera(id):
 				_check(_text(card, "Level").begins_with("Kamera · "), "Die Karte der Kamera %s nennt die Art, war: %s" % [id, _text(card, "Level")])
-				_check(bool(_hud_script.call("has_icon", id)) and str(icon.get("icon_id")) == id, "Die Kamera %s hat ihr gezeichnetes Bild." % id)
-				_check(card.get_node_or_null("Shape") != null, "Die Karte der Kamera %s zeigt daneben die Form." % id)
 			elif ItemDefs.is_weapon(id):
 				_check(_text(card, "Level").begins_with("Waffe · "), "Die Karte der Waffe %s nennt die Art." % id)
 				_check(_text(card, "Text").contains("Hand") or _text(card, "Text").contains("Hände"), "Die Karte der Waffe %s nennt die Hände." % id)
 	_equal(seen, ids.size(), "Jeder Gegenstand hatte seine Karte.")
 	choice.call("close")
+	_game.set("broken_loot", loot_before == true)
 
 
 # --- Pausemenü ------------------------------------------------------------------------
@@ -947,6 +1032,17 @@ func _test_game_over() -> void:
 	_equal(_text(list, "Row_burn/Rarity"), "UNGEWÖHNLICH", "Die Zeile nennt die Rarität des Upgrades.")
 	_equal(_text(list, "Synergy_storm_front/Name"), "Gewitterfront", "Synergie in der Liste.")
 	_check(not _label(screen, "empty_label").visible, "Mit Upgrades kein Leer-Hinweis.")
+	# Jede Zeile zeigt das Bild ihres Gegenstands (item_icons.gd), die Synergie ihr eigenes Symbol.
+	for row_id: String in ["pierce", "chain_lightning", "burn"]:
+		var row_icon: Control = list.get_node_or_null("Row_%s/Icon" % row_id) as Control
+		_check(row_icon is ItemIcons.View and str(row_icon.get("item_id")) == row_id, "Die Zeile von %s zeigt das Bild des Gegenstands." % row_id)
+		if row_icon != null:
+			var row_control: Control = list.get_node("Row_%s" % row_id) as Control
+			_check(row_icon.position.x >= 0.0 and row_icon.position.y >= 0.0 and row_icon.position.y + row_icon.size.y <= row_control.size.y + 0.5,
+				"Das Bild von %s bleibt in seiner Zeile." % row_id)
+			_check(row_icon.position.x + row_icon.size.x <= (row_control.get_node("Name") as Control).position.x + 0.5, "Das Bild von %s steht vor dem Namen." % row_id)
+			_check(is_equal_approx(row_icon.size.x, row_icon.size.y) and row_icon.size.x >= 24.0, "Das Bild von %s ist quadratisch und mindestens 24 Pixel groß." % row_id)
+	_equal(str((list.get_node("Synergy_storm_front/Icon") as Control).get("icon_id")), "synergy", "Die Synergie behält ihr Symbol.")
 	_equal((screen.get("restart_button") as Button).text, "NEUSTART", "Knopf Neustart.")
 	_equal((screen.get("quit_button") as Button).text, "BEENDEN", "Knopf Beenden.")
 	_check((screen.get("quit_button") as Button).pressed.get_connections().size() > 0, "Beenden ist verdrahtet.")
@@ -1029,7 +1125,9 @@ func _test_game_over() -> void:
 	_equal(_text(list, "Row_cam_flash/Name"), "Blitzlicht-Kamera", "Die Blitzlicht-Kamera steht in der Liste.")
 	_equal(_text(list, "Row_cam_flash/Rarity"), "EPISCH", "Die Kamera nennt ihre Rarität.")
 	_equal(_text(list, "Row_revive/Name"), "Zweite Staffel", "Neue Gegenstände stehen mit ihrem Namen in der Liste.")
-	_check(list.get_node_or_null("Row_cam_flash/Icon") != null, "Die Zeile der Kamera hat ein Bild.")
+	for camera_row_id: String in ["cam_flash", "drone", "revive", "burn"]:
+		var camera_icon: Control = list.get_node_or_null("Row_%s/Icon" % camera_row_id) as Control
+		_check(camera_icon is ItemIcons.View and str(camera_icon.get("item_id")) == camera_row_id, "Die Zeile von %s zeigt das Bild aus item_icons.gd." % camera_row_id)
 	_check(list.get_child(2).name == "Row_drone" and list.get_child(4).name == "Synergy_storm_front", "Reihenfolge: Upgrades, Kameras, Synergien.")
 	_equal(_label(screen, "bank_gain_label").text, "+9.000", "Die Gutschrift steht mit Tausenderpunkt da.")
 	_equal(_label(screen, "bank_label").text, "1.234.567", "Auch ein Millionen-Konto steht ganz da.")
@@ -1054,6 +1152,7 @@ func _test_game_over() -> void:
 		var shown_rows: int = 0
 		var rows_fit: bool = true
 		var overlap: bool = false
+		var icons_fit: bool = true
 		var rects: Array[Rect2] = []
 		for child: Node in list.get_children():
 			if child.is_queued_for_deletion():
@@ -1068,8 +1167,13 @@ func _test_game_over() -> void:
 			rects.append(rect)
 			if str(row.name).begins_with("Row_"):
 				shown_rows += 1
+				var many_icon: Control = row.get_node_or_null("Icon") as Control
+				icons_fit = icons_fit and many_icon is ItemIcons.View and many_icon.position.y >= 0.0 \
+						and many_icon.position.y + many_icon.size.y <= row.size.y + 0.5 \
+						and many_icon.position.x + many_icon.size.x <= (row.get_node("Name") as Control).position.x + 0.5
 		_check(rows_fit, "Mit %d Einträgen bleibt die Liste in ihrem Rahmen." % count)
 		_check(not overlap, "Mit %d Einträgen überlappt keine Zeile." % count)
+		_check(icons_fit, "Mit %d Einträgen hat jede Zeile ihr Bild, und es bleibt in der Zeile vor dem Namen." % count)
 		if count <= 20:
 			_equal(shown_rows, count, "Mit %d Einträgen stehen alle in der Liste." % count)
 			_check(list.get_node_or_null("More") == null, "Mit %d Einträgen fehlt nichts." % count)

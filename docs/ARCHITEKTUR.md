@@ -2458,3 +2458,511 @@ möglich, von Anfang an frei (`UnlockDefs.START`), Verkaufswert wie die anderen 
 - Ab der neunten Kamera ragen Kameras in die oberen Bildecken.
 - Abschnitt 13.2 (Baum in `main.gd`), 13.6 und 21 sind älter als dieser Stand: Bei Widerspruch
   gelten 22 bis 24.
+
+## 25. Neue Anordnung des Rucksack-Bildschirms, Kombinieren in der Ablage (Stand 2026-11-21)
+
+Vom Nutzer gewünscht: der Rucksack-Bildschirm in der Aufteilung, die Spiele mit Raster-Rucksack
+üblich haben (Ablage als Regal links, Rucksack in der Mitte, Karte am Gegenstand). Regeln und
+Bedienung sind gleich geblieben. Wo ältere Abschnitte (16, 18, 22.7, 24.3) eine feste Info-Tafel
+rechts oder eine Ablage-Zeile unten beschreiben, gilt dieser Abschnitt.
+
+### 25.1 Aufbau (`scripts/ui/backpack_screen.gd`)
+
+- **Oben:** Leiste mit Titel links, den beiden Händen in der Mitte, Punkten und Knopf „?“ rechts.
+- **Links:** die Ablage als Regal mit „ABLAGE n / 5“. Die Gegenstände liegen untereinander in
+  echter Form mit Raritäts-Kästchen, der Name steht daneben. Bei viel Inhalt werden erst die
+  Felder kleiner, dann die Abstände, zuletzt entfallen die Namen. Zeilen über der Grenze sind rot.
+- **Mitte:** der Rucksack, Feldgröße 96 px. Gezeichnet sind nur vorhandene Felder als eine Fläche
+  mit Umriss. Mögliche neue Felder erscheinen blass nur, solange ein Rucksack-Teil gehalten wird.
+  Darunter eine Zeile „Freie Felder · Hände · Bonus“.
+- **Rechts unten:** das Feld „VERKAUFEN“, kleiner als früher, weiter zum Draufziehen.
+- **Unten:** Leiste mit Tastenhinweisen, der Warnung „Noch N Gegenstände aus der Ablage räumen“
+  und „FERTIG“.
+- **Karte am Gegenstand:** erscheint neben dem Gegenstand unter der Maus oder in der Hand, immer
+  ganz im Bild und nie auf ihm. Sie wählt zuerst eine Seite, die seine Sternfelder frei lässt.
+  Inhalt: Name, Zeile „Rarität · Art · Felder“, Wertebalken, Wirkung, „Darauf wirken“,
+  Schlagworte, Verkaufswert (alles aus `describe(uid)`).
+- **Wertebalken:** Waffen gegen den besten Wert aller Waffen (Schaden, Schüsse je Sekunde,
+  Magazin, Nachladen), Kameras gegen den besten Grundwert aller Kameras derselben Rarität
+  (Schaden, Schussfolge, Reichweite).
+- **Hilfe:** „So geht es“ ist eine Tafel, die Knopf „?“, F1 oder H ein- und ausblenden. Beim
+  ersten Öffnen des Rucksacks in einem Programmlauf steht sie von selbst da.
+
+### 25.2 Schnittstelle
+
+- Unverändert: `board`, `request_close`, `describe`, `camera_stats_text`, `star_marks`,
+  `hand_slots`, `drop_at`, `drop_preview`, `item_at`, `cell_rect`, `grid_rect`, `storage_area`,
+  `sell_rect`, die Labels `stats_label`, `hands_label`, `storage_label`, `warning_label`,
+  `hint_label`, `done_button`.
+- Ersetzt: `info_*_label` durch `card_name_label`, `card_subtitle_label`, `card_text_label`,
+  `card_extra_label`, `card_sell_label`, dazu `card`, `card_tags_label`, `card_bars_box`.
+- Neu: `is_card_open()`, `card_uid()`, `card_rect()`, `card_text()`, `card_bars()`,
+  `stat_bars(uid)`, `help_panel`, `is_help_open()`, `set_help_open(bool)`, `toggle_help()`,
+  `grid_origin()`, `pack_rect()`, `drawn_cells()`, `ghost_cells()`, `shelf_layout()`,
+  `item_rect(uid)`, `overflow_text()`, `drop_on_storage_item(target_uid)`, `storage_merge_target()`.
+- `storage_rect(index)` ist jetzt die Zeile im Regal.
+
+### 25.3 Kombinieren in der Ablage
+
+Zwei gleiche Gegenstände gleicher Rarität lassen sich auch kombinieren, wenn sie in der Ablage
+liegen: Ablage auf Ablage, Raster auf Ablage, Ablage auf Raster. Das Ergebnis bleibt, wo das Ziel
+lag. Rucksack-Teile und Legendäre bleiben ausgenommen.
+
+- Kern (`backpack_state.gd`): `can_merge(uid, target_uid)`, `merge(uid, target_uid)` nimmt auch
+  ein Ziel in der Ablage, `find_storage_merge_partner(uid)`. `merge_target(uid, cell)` und
+  `find_merge_partner(uid)` gelten weiter nur für das Raster, das selbsttätige Einräumen
+  (`Game._auto_pack`) kombiniert also weiter nur mit Eingeräumtem.
+- Bildschirm: Loslassen auf einem passenden Gegenstand im Regal kombiniert, das Ziel leuchtet
+  beim Halten wie im Raster. Nach jedem Kombinieren blitzt das Ergebnis kurz auf.
+
+### 25.4 Tests und offene Punkte
+
+- `test_backpack_screen.gd` 1436 Prüfungen, `test_backpack.gd` 5108, alle 21 Dateien bestehen.
+- Zwei Tests hingen an der Rechnerlast und sind abgesichert: `test_audio.gd` prüft den Takt von
+  Flamme und Strahl nur, wenn die Schüsse wirklich im Takt kamen. `test_smoke_game.gd` schickt im
+  Tod-Test Schlurfer nach, falls Gegenstände aus den Kisten davor welche töten.
+- Offen: Bilder statt Namen auf den Gegenständen, eine Werkbank für Rezepte, andere Bildschirme
+  angleichen. Ganz rechts im vollen Raster steht die Karte links und verdeckt Nachbarn. Ein Stern
+  eines Nachbarn kann in hochkant liegenden Gegenständen einen Buchstaben des Namens verdecken.
+  Nur bei 1280×720 angesehen.
+
+## 26. Ausbau 4: Ablage ohne Grenze, Material, kaputte Fundstücke, Grafik und Ton (Stand 2026-11-21)
+
+Vom Nutzer entschieden: Die Ablage hat keine Grenze mehr. Neben dem Verkaufen für Punkte kann man
+Gegenstände verschrotten und bekommt dafür Material. Alles, was man findet, ist zuerst kaputt und
+muss mit Material repariert werden, bevor man es einräumen oder kombinieren kann. Kisten geben
+weiter eine Karte aus drei. Dazu bessere Grafik (Zombies, Licht und Stimmung, Treffer und Effekte,
+Bilder für alle Gegenstände) und besserer Ton (Musik, Raumklang und Mischung, mehr Wucht und
+Abwechslung).
+
+### 26.1 Regeln
+
+- **Ablage:** unbegrenzt. `Balance.BACKPACK_STORAGE`, `BackpackState.STORAGE_CAPACITY` und
+  `storage_overflow()` entfallen, ebenso die Sperre von „FERTIG“ und der Verkauf bei Überlauf im
+  selbsttätigen Einräumen. Das Regal im Rucksack-Bildschirm rollt (Mausrad), nichts schrumpft.
+- **Material:** eine zweite Währung je Lauf, `Game.materials: int`. Start `Balance.MATERIAL_START`
+  (3). Für jede geschaffte Welle `Balance.MATERIAL_PER_WAVE` (2).
+- **Verschrotten:** `Game.scrap_item(uid) -> int` nimmt einen Gegenstand aus Raster oder Ablage
+  (kaputt oder heil) und gibt `Balance.SCRAP_YIELD[rarität - 1]` Material (1, 2, 3, 4, 6), ein
+  Rucksack-Teil `Balance.SCRAP_YIELD_BAG` (1). Verkaufen für Punkte bleibt daneben bestehen, auch
+  für kaputte Gegenstände, zum vollen Wert.
+- **Kaputt:** Jeder Eintrag im Rucksack hat das Feld `broken: bool`. Gegenstände aus Kisten kommen
+  kaputt in die Ablage (`Game.broken_loot == true`). Nicht kaputt sind: Rucksack-Teile (sie sind
+  Platz, kein Gegenstand zum Benutzen), die Startgegenstände der Kandidaten und alles aus
+  `Game.grant_item(id, level)` ohne den neuen dritten Parameter `broken := false`.
+- **Sperre:** Ein kaputter Gegenstand lässt sich nicht einräumen (`can_place` false, `place` false,
+  `auto_place` false) und nicht kombinieren, weder als Ziel noch als Quelle (`can_merge` false).
+  Er liegt in der Ablage und wirkt nicht.
+- **Reparieren:** `Game.repair_item(uid) -> bool` kostet `Balance.REPAIR_COST[rarität - 1]`
+  Material (1, 2, 3, 4, 5). Danach ist `broken` false, der Gegenstand bleibt, wo er liegt.
+  `Game.repair_cost(uid) -> int`, `Game.scrap_value(uid) -> int`, `Game.can_repair(uid) -> bool`.
+- **Signale:** `Events.materials_changed(total, delta)`, `Events.item_repaired(uid)`,
+  `Events.item_scrapped(uid, amount)`.
+- **Headless:** `Game.broken_loot` ist ohne Bildschirm `false` (wie `unlock_all`), damit die
+  vorhandenen Tests ihre Fundstücke weiter benutzen können. Tests für diese Regeln schalten es ein
+  und danach wieder aus.
+- **Selbsttätiges Einräumen** (`Game.auto_pack`): Ein kaputtes Fundstück bleibt in der Ablage. Es
+  wird nicht von selbst repariert.
+
+### 26.2 Bilder für Gegenstände
+
+Neue Datei `scripts/ui/item_icons.gd` (nur static): `has(id) -> bool` und
+`draw(canvas: CanvasItem, id: String, rect: Rect2, tint: Color = Color.WHITE)` zeichnet das Bild
+eines Gegenstands mit den Zeichenbefehlen des `canvas` in das Rechteck. Für alle 65 IDs aus
+`ItemDefs.ORDER`. Alle Bildschirme benutzen nur diese Datei.
+
+### 26.3 Wem welche Datei gehört
+
+- **Kern:** `scripts/core/*`, `scripts/autoload/*`, `chest_dropper.gd`/`wave_manager.gd` nur für die
+  Wellen-Prämie, Kern-Tests (`test_backpack`, `test_game_state`, neu `test_materials`).
+- **Rucksack und HUD:** `scripts/ui/backpack_screen.gd`, `scripts/ui/hud.gd`,
+  `tests/test_backpack_screen.gd`, `tests/test_ui.gd` (nur HUD-Teile).
+- **Bilder:** `scripts/ui/item_icons.gd`, `scripts/ui/chest_choice.gd`, `scripts/ui/unlock_screen.gd`,
+  `scripts/ui/game_over.gd`, neu `tests/test_item_icons.gd`, `tests/test_unlock_screen.gd`,
+  `tests/test_ui.gd` (nur Karten-Teile).
+- **Zombies:** `scripts/game/zombies/zombie.gd`, `tests/test_zombies_waves.gd`.
+- **Licht und Stimmung:** `scripts/game/level/*`, `scripts/game/main.gd`, `project.godot` (nur
+  Abschnitt `rendering`), `tests/test_level.gd`.
+- **Treffer und Effekte:** `scripts/game/fx/fx.gd`, neue Dateien unter `scripts/game/fx/`,
+  `scripts/game/player/*` (Mündungsfeuer, Leuchtspur, Kamera-Wackeln), `scripts/game/upgrades/*_fx.gd`,
+  `tests/test_player_weapons.gd`, `tests/test_player_abilities.gd`.
+- **Ton:** `tools/make_sounds.py`, `audio/*`, `scripts/game/audio/*`, `scripts/game/settings.gd`,
+  `scripts/ui/settings_menu.gd`, `tests/test_audio.gd`, `tests/test_settings_shaders.gd`.
+
+`tests/test_smoke_game.gd`, `perf_game.gd`, `capture_game.gd` und `docs/ARCHITEKTUR.md` gehören dem
+Zusammenbau.
+
+### 26.4 Schnittstellen des Kerns
+
+Stand nach dem Bau des Kerns (2026-11-21). Geprüft in `tests/test_materials.gd` (210 Prüfungen),
+`tests/test_backpack.gd` (5150) und `tests/test_game_state.gd`. Events hat jetzt 47 Signale.
+
+#### Form der Einträge im Rucksack
+
+`BackpackState.item(uid)`, `placed_items()`, `storage_items()` und `remove(uid)` liefern je Gegenstand:
+
+```
+{ "uid": int, "id": String, "level": int, "rot": int, "placed": bool, "pos": Vector2i, "broken": bool }
+```
+
+- `"broken"` steht in **jedem** Eintrag, auch in heilen (`false`) und in Rucksack-Teilen (immer `false`).
+- Ein kaputter Gegenstand liegt **immer in der Ablage** (`placed == false`). Kaputt und eingeräumt
+  zugleich gibt es nicht. Deshalb zählt er nirgends mit: nicht in `loadout()`, `cameras()`,
+  `upgrade_levels()`, `global_copies()`, `stats()`, `summary()`, `hands_used()`, nicht als Sternziel
+  und nicht als Sternquelle.
+- Die Rarität (`"level"`) eines kaputten Gegenstands ist bekannt und bleibt bei der Reparatur gleich.
+
+#### `BackpackState` (`scripts/core/backpack_state.gd`)
+
+| Funktion | Bedeutung |
+|---|---|
+| `add_item(id: String, level: int = 1, broken: bool = false) -> int` | Neuer Gegenstand in die Ablage, gibt die uid (-1 bei unbekannter ID). `broken = true` legt ihn kaputt ab. Ein Rucksack-Teil ist nie kaputt, auch mit `broken = true`. |
+| `is_broken(uid: int) -> bool` | Kaputt? `false` auch für eine unbekannte uid. |
+| `set_broken(uid: int, broken: bool) -> bool` | Macht kaputt oder heil. `true`, wenn sich etwas geändert hat. `false` bei unbekannter uid, wenn er schon so ist, und für Rucksack-Teile. Wird ein **eingeräumter** Gegenstand kaputt, kommt er dabei in die Ablage (danach `Game.sync_build()` rufen). |
+| `repair(uid: int) -> bool` | Wie `set_broken(uid, false)`: `true`, wenn er kaputt war. Kostet hier nichts, die Kosten regelt `Game.repair_item`. Der Gegenstand bleibt in der Ablage. |
+| `can_place(uid, pos, rot) -> bool`, `place(uid, pos, rot) -> bool` | Für einen kaputten Gegenstand immer `false`, nichts ändert sich. |
+| `find_spot(uid) -> Dictionary`, `auto_place(uid) -> bool` | Für einen kaputten Gegenstand leer bzw. `false`. |
+| `can_merge(uid, target_uid) -> bool`, `merge(uid, target_uid) -> bool` | `false`, sobald einer der beiden kaputt ist (beide Richtungen, Raster und Ablage). |
+| `merge_target(uid, cell) -> int`, `find_merge_partner(uid) -> int`, `find_storage_merge_partner(uid) -> int` | `-1` für einen kaputten Gegenstand, und ein kaputter wird nie als Partner genannt. |
+| `set_rotation(uid, rot)`, `remove(uid)`, `store(uid)`, `has_item(uid)`, `highest_level(id)` | Unverändert, gelten auch für kaputte. `highest_level` zählt kaputte mit (Besitz für die Kisten-Angebote). |
+
+Entfallen ist `Balance.BACKPACK_STORAGE`. Die Ablage hat keine Grenze.
+
+#### `Game` (`scripts/autoload/game.gd`)
+
+| Mitglied | Bedeutung |
+|---|---|
+| `var materials: int` | Material des Laufs. Nur lesen. Bei jedem neuen Lauf (`start_run`, `restart_run`) `Balance.MATERIAL_START` (3). |
+| `var broken_loot: bool` | `true`: Gegenstände aus Kisten kommen kaputt in die Ablage. Mit Bildschirm `true`, ohne (headless, Tests) `false`. Bleibt über Läufe erhalten, darf gesetzt werden. |
+| `add_materials(amount: int) -> void` | Schreibt Material gut, sendet `materials_changed(stand, amount)`. 0 oder weniger ändert und sendet nichts. |
+| `repair_cost(uid: int) -> int` | `Balance.REPAIR_COST[rarität - 1]` (1, 2, 3, 4, 5). **0**, wenn es ihn nicht gibt oder er nicht kaputt ist (auch für Rucksack-Teile). |
+| `scrap_value(uid: int) -> int` | `Balance.SCRAP_YIELD[rarität - 1]` (1, 2, 3, 4, 6), ein Rucksack-Teil `Balance.SCRAP_YIELD_BAG` (1). Kaputt und heil geben gleich viel. 0, wenn es ihn nicht gibt. |
+| `can_repair(uid: int) -> bool` | Er ist kaputt und `materials >= repair_cost(uid)`. |
+| `repair_item(uid: int) -> bool` | Zieht `repair_cost(uid)` ab, macht ihn heil, er bleibt in der Ablage. Sendet `materials_changed(stand, -kosten)`, dann `item_repaired(uid)`. **Kein `build_changed`** (am Build ändert sich nichts): Wer anzeigt, zeichnet nach `true` selbst neu oder hört auf `item_repaired`. `false` ohne jede Änderung und ohne Signal, wenn er nicht kaputt ist, es ihn nicht gibt oder das Material nicht reicht. |
+| `scrap_item(uid: int) -> int` | Entfernt den Gegenstand aus Raster oder Ablage (kaputt oder heil, auch Rucksack-Teile in der Ablage), ruft `sync_build()` und schreibt das Material gut. Reihenfolge der Signale: `build_changed` (davor `cameras_changed`, falls nötig), `materials_changed(stand, ertrag)`, `item_scrapped(uid, ertrag)`. Gibt den Ertrag zurück, 0 ohne Signal, wenn es ihn nicht gibt. Gibt keine Punkte. |
+| `sell_item(uid: int) -> int` | Unverändert, auch für kaputte zum vollen Wert (`ItemDefs.sell_value`). Gibt kein Material. |
+| `grant_item(id: String, level: int = 1, broken: bool = false) -> int` | Neu der dritte Parameter. Ohne ihn heil, gleich wie `broken_loot` steht. Rucksack-Teile nie kaputt. |
+| `choose_offer(index: int) -> void` | Ein gewählter Gegenstand kommt mit `broken_loot` kaputt in die Ablage (Rucksack-Teile nie), danach wie bisher State PACKING und `backpack_opened(uid)`. |
+| `close_backpack() -> bool` | Schließt immer, wenn der State PACKING ist. Die Ablage hält den Rucksack nicht mehr offen. `false` nur noch bei falschem State. |
+| `start_run(seed_value: int = -1) -> void` | Sendet zusätzlich `materials_changed(Balance.MATERIAL_START, 0)`, nach `run_started` und `points_changed`. |
+| `get_stats() -> Dictionary` | Neuer Schlüssel `"materials": int` (aktueller Stand). |
+| `auto_pack` (`_auto_pack`) | Verkauft nichts mehr. Was nirgends passt, keine Hand frei hat oder kaputt ist, bleibt in der Ablage. Repariert wird nicht von selbst. Rucksack-Teile räumen sich weiter selbst ein. |
+
+Wellen-Prämie: `Game` hört selbst auf `Events.wave_cleared` und ruft `add_materials(Balance.MATERIAL_PER_WAVE)`
+(2). `wave_manager.gd` und `chest_dropper.gd` sind unverändert. In den States MENU und GAME_OVER gibt es keine Prämie.
+
+Startgegenstände der Kandidaten (`CharacterDefs.build_backpack`) und alles, was Module mit
+`backpack.add_item(id, level)` ohne dritten Parameter anlegen (Wandkauf in `weapon_controller.gd`), sind heil.
+
+#### Signale (`scripts/autoload/events.gd`)
+
+| Signal | Wann |
+|---|---|
+| `materials_changed(total: int, delta: int)` | `total` neuer Stand, `delta` Änderung: +2 je Welle, +Ertrag beim Verschrotten, +n bei `add_materials`, -Kosten beim Reparieren, **0 beim Start eines Laufs** (Anzeige zurücksetzen, kein Gewinn). |
+| `item_repaired(uid: int)` | Nach `Game.repair_item`, nach `materials_changed`. Der Gegenstand ist schon heil. |
+| `item_scrapped(uid: int, amount: int)` | Nach `Game.scrap_item`, als Letztes. Der Gegenstand ist schon entfernt, `Game.backpack.item(uid)` ist leer. |
+
+#### Veraltete Hüllen (nur damit alter Code lädt, beim Umbau des Bildschirms entfernen)
+
+- `BackpackState.storage_overflow() -> bool`: gibt immer `false` zurück.
+- `BackpackState.STORAGE_CAPACITY: int`: jetzt `999999`.
+
+Benutzer: `scripts/ui/backpack_screen.gd` (Zeilen 1461, 1462, 1497, 1514, 1848: Überschrift
+„ABLAGE n / 999999“, Warnung, blasser Knopf, Feld `"over"` in `shelf_layout()`) und
+`tests/test_backpack_screen.gd` (Zeilen 501, 736, 955, 1305, 1311, 1365, 1368, 1379, 1442, 1501, 1506, 1507).
+`tests/test_backpack.gd` prüft die beiden Hüllen in `_test_storage_and_remove` mit zwei Prüfungen:
+Wer die Hüllen löscht, löscht diese zwei Zeilen mit.
+
+Folge für `tests/test_backpack_screen.gd`: 21 von 1436 Prüfungen scheitern, alle prüfen die
+entfallene Regel (Überlauf, Warnung „Noch N Gegenstände“, blasses FERTIG, abgelehntes Schließen
+und was im selben Ablauf darauf aufbaut). Sie gehören mit dem Umbau des Bildschirms ersetzt.
+
+#### Entscheidungen über 26.1 hinaus
+
+- **Kaputt heißt Ablage:** Statt jede Auswertung zu filtern, gilt die feste Regel, dass ein kaputter
+  Gegenstand nie eingeräumt ist. `set_broken(uid, true)` auf einem eingeräumten Gegenstand lagert
+  ihn deshalb aus.
+- **`repair_cost` ist 0 für heile Gegenstände**, nicht der Preis ihrer Rarität. `repair_cost(uid) > 0`
+  ist damit gleichbedeutend mit `is_broken(uid)`.
+- **Kein eigenes Ausgeben von Material:** Es gibt kein `spend_materials`. Material sinkt nur durch
+  `repair_item`.
+- **Kein State-Zwang:** `repair_item` und `scrap_item` prüfen den State nicht (wie `sell_item`).
+- **Reparieren sendet kein `build_changed`**, Verschrotten schon (auch aus der Ablage, wie Verkaufen).
+- **Kombinieren:** Beide müssen heil sein, das Ergebnis ist also immer heil.
+- **Kisten-Angebote:** Ein kaputter Gegenstand in der Ablage zählt als Besitz (`owned_level`).
+- **`broken_loot` und `auto_pack` zusammen** (mit Bildschirm, z. B. `tests/perf_game.gd` und
+  `tests/capture_game.gd`): Fundstücke bleiben kaputt in der Ablage und wirken nie. Wer dort die
+  alte Wirkung braucht, setzt `Game.broken_loot = false`.
+
+#### Hinweise für Tests der Oberfläche
+
+- Headless ist `Game.broken_loot == false`. Kaputte Gegenstände für einen Test:
+  `Game.backpack.add_item(id, level, true)`, `Game.grant_item(id, level, true)` oder
+  `Game.broken_loot = true` setzen und am Ende wieder `false`.
+- Material für einen Test: `Game.add_materials(n)`. Start je Lauf 3.
+
+## 27. Ausbau 4: Stand nach dem Zusammenbau (Stand 2026-11-21)
+
+Alles aus Abschnitt 26 ist gebaut. Wo ältere Abschnitte widersprechen (10, 13.5, 13.6, 21, 23.5,
+24.4, 25), gilt dieser Abschnitt.
+
+### 27.1 Rucksack-Bildschirm und HUD
+
+- Ablage ohne Grenze: Überschrift „ABLAGE n“, das Regal rollt (Mausrad, Rollbalken, von selbst
+  beim Ziehen an den Rand), Feldgröße 42 px, neueste oben. „FERTIG“ ist nie gesperrt.
+- Material: „MATERIAL n“ mit Zahnrad in der oberen Leiste und klein im HUD unter den Punkten.
+- Kaputte Gegenstände: grau, schraffiert, rotes Schild mit den Reparaturkosten. Über dem Raster
+  rote Vorschau und „ERST REPARIEREN“.
+- Drei Felder rechts unten: „REPARIEREN“ (−N Material), „VERSCHROTTEN“ (+N Material), „VERKAUFEN“
+  (+N Punkte). Tasten am Gegenstand unter dem Zeiger: F repariert, zweimal X innerhalb von 1,5 s
+  verschrottet (das erste X merkt nur vor), N blendet die Namen ein.
+- Bilder: Jeder Gegenstand zeigt sein Bild aus `ItemIcons` auf einer Fläche in der Farbe seiner
+  Rarität. Der Name steht nur in der Karte (und mit N als Zeile am unteren Rand).
+- Neue Funktionen in `backpack_screen.gd`: `drop_on_repair()`, `drop_on_scrap()`, `repair(uid)`,
+  `press_repair()`, `press_scrap()`, `scrap_armed_uid()`, `repair_rect()`, `scrap_rect()`,
+  `action_at(pos)`, `shelf_scroll()`, `set_shelf_scroll(v)`, `scroll_to_item(uid)`, `icon_rect(uid)`,
+  `names_shown()`, `toggle_names()`. Entfernt: `overflow_text()`.
+- Die Hüllen `BackpackState.storage_overflow()` und `STORAGE_CAPACITY` benutzt niemand mehr außer
+  zwei Zeilen in `test_backpack.gd`: Sie können mit diesen Zeilen entfallen.
+
+### 27.2 Bilder (`scripts/ui/item_icons.gd`)
+
+65 Bilder aus Zeichenbefehlen, ohne Dateien. `has(id)`, `draw(canvas, id, rect, tint)`,
+`commands(id, rect, tint)` (dieselben Befehle als Liste), Klasse `View` (Control). Das Bild füllt
+das größte Quadrat in der Mitte des Rechtecks. Benutzt in Rucksack, HUD (Kamera-Zeilen),
+Kistenkarten (Karte 470 px hoch, Hinweis „Kommt kaputt in die Ablage · Reparatur: N Material“,
+`ChestChoice.broken_note`), Programm und Game Over.
+
+### 27.3 Zombies (`zombie.gd`, neu `zombie_look.gd`, `zombie_body.gd`)
+
+- Körper aus elf Teilen (Elite 13) mit Gesicht, Gelenken und Schritten: Schlurfer als Kandidat,
+  Sprinter als Kabelträger, Elite als Showmaster. Vier Varianten je Typ, Zufall aus `look_seed`
+  bzw. `randi()`, nie aus `Game.rng`.
+- `Body` ist jetzt ein `Node3D`, Kopf und Arme liegen unter `Body/Rig/Hips/Torso/…`.
+  `get_body()`, `get_mesh_count()`, `look_seed`.
+- Tod je Ursache (umfallen, Kopf fliegt weg, zerlegt, sackt zusammen). Der Körper liegt
+  `ZombieBody.CORPSE_TIME` (1,6 s) im Behälter `ZombieCorpses` ohne Kollision, ab `MAX_CORPSES` (8)
+  kürzer.
+- Eine neue Material-Art (`emission_enabled=1,vertex_color_use_as_albedo=1`): Farben stecken in
+  den Ecken der Netze, ein Material je Körper. Sie steht in `data/shader_warmup.json`.
+- Spielregeln, Trefferzonen und Signale sind unverändert. Bei Schlag, Zucken und Taumeln verlässt
+  der sichtbare Kopf kurz seine Trefferzone.
+
+### 27.4 Licht und Stimmung (`level_builder.gd`, `project.godot`)
+
+- Umgebung: Tonwert-Kurve Filmic, leichter Kontrast und Sättigung, violetter Dunst, Glühen mit
+  Schwelle 1,0 (nur Farben über 1,0 leuchten nach). Der Compatibility-Renderer kann SSIL, SSR,
+  SDFGI und Volumen-Nebel nicht, SSAO ist zu teuer: nicht benutzt.
+- Fünf gerichtete Lichter auf eigenen Render-Ebenen (`LAYER_ACTORS/ROOMS/STAGE/FLOOR`): Spieler,
+  Zombies und Kisten bleiben überall hell. `ShadowKey` trifft nur die Böden und wirft als einziges
+  Licht Schatten.
+- 27 Punktlichter und Scheinwerfer bei offenen Räumen (15 am Start), je Raum drei mit eigener
+  Stimmung. Höchstens 7 Lichter je großem Mesh.
+- Bei `wave_cleared` leuchtet das Applaus-Schild, bei `wave_started` rotes Warnlicht.
+- Regel: Dunst und Glühen nie im Spiel umschalten (sonst werden alle Shader neu übersetzt).
+- Fund, nicht behoben: Mit der Einstellung „Auflösung 3D“ unter 100 % dauert ein Bild hier 6 bis
+  10 ms statt etwa 2 ms. Ob das am neuen Licht liegt, ist nicht gegengemessen.
+
+### 27.5 Treffer und Effekte (`fx.gd`, neu `fx_pool.gd`, `view_model.gd`, `player.gd`)
+
+- Vorrat `FxPool` mit festen Größen: 32 Leuchtspuren, 72 Funken, 88 Spritzer/Rauch, 28
+  Einschussmale. Kein neues Licht je Schuss (ein gemeinsames `MuzzleLight`).
+- Mündungsfeuer je Waffenart, Leuchtspur, Hülsen, Einschläge an Wand und Boden (`Fx.impact`),
+  grüne Spritzer am Zombie (`Fx.splatter`), Platzen beim Tod (`Fx.kill_burst`), kräftigere
+  Explosion, Blitz, Flamme, Strahl, Mine mit Blinklicht.
+- Trefferzahlen: Größe nach Schaden, Krit pink mit „!“, Treffer innerhalb von 0,22 s und 0,5 m
+  zählen in einer Zahl zusammen.
+- Kamera-Wackeln (`player.add_camera_shake`, Stärke `CAMERA_SHAKE_STRENGTH`): höchstens 1,15 Grad,
+  nach etwa 0,3 s weg, `get_aim_direction()` rechnet es heraus.
+- Offen im HUD: eine eigene Marke für kritische Treffer und die Kill-Marke bei Kills durch Flamme,
+  Strahl, eigene Explosionen und Blitzsprünge.
+
+### 27.6 Ton (`scripts/game/audio/*`, `tools/make_sounds.py`, `tools/make_music.py`)
+
+- Musik: `music_menu`, `music_calm`, `music_wave`, `music_late` (Zusatzspur ab Welle 10),
+  `music_game_over`, berechnet, 22050 Hz Stereo, zusammen 10,7 MB. `music.gd` (Kind von `sfx.gd`)
+  wählt nach `Game.state` und Signalen, blendet in 1 s über, wird in Pause, Kistenwahl und
+  Rucksack leiser und dumpfer.
+- Busse (`audio_buses.gd`): `Master` mit Begrenzer (−1 dBFS), darunter `Sfx` mit Hall-Bus `Reverb`
+  für alles mit Ort, und `Music` mit Tiefpass. Laute Ereignisse drängen die Musik kurz zurück
+  (`"duck"` in `SOUNDS`).
+- Einstellungen `music_volume` (0,7) und `sfx_volume` (1,0) mit Reglern „MUSIK“ und „GERÄUSCHE“.
+- 103 Dateien statt 61: drei Varianten für häufige Geräusche, sattere Schüsse und Explosion,
+  neu Schritte, Landen, Herzschlag unter 30 % Leben, Publikum (Raunen, Jubel, „Oh“, Buh),
+  Reparieren, Verschrotten, Material.
+- `tools/check_mix.py` rechnet die Mischung nach. Angehört hat es niemand. Nachstellen nach dem
+  Probehören: Lautstärke je Musikstück in `music.gd` (`LAYERS`, dazu `FADE_TIME`, `MUFFLE_DB`,
+  `MUFFLE_CUTOFF`), je Geräusch in `sfx.gd` (`SOUNDS`: `db`, `duck`), Hall und Begrenzer in
+  `audio_buses.gd` (`REVERB_*`, `LIMITER_CEILING_DB`).
+
+### 27.7 Zusammenbau und Prüfung
+
+- `run_tests.ps1`: 23 Dateien, alle bestanden (neu `test_materials`, `test_item_icons`).
+- `tests/perf_game.gd -- record`: 22 Material-Arten, kein Shader-Ruckler. Volle Welle im Mittel
+  4,6 ms je Bild (vor Ausbau 4: 3,1 ms). Die zwei Bilder über 25 ms sind Waffenwechsel der Messung.
+- Mit Bildschirm durchgespielt (Probe, kein Test im Repo): Kiste, Fundstück kommt kaputt ins Regal,
+  lässt sich nicht einräumen, Reparatur kostet Material, danach einräumen, Kampf mit neuen Zombies,
+  Licht und Effekten.
+- Wer mit Bildschirm probt, setzt `Game.progress_file_enabled = false` und bedient die Kistenwahl
+  über `chest_choice.choose(index)`, nicht über `Game.choose_offer` (sonst bleibt die Anzeige stehen).
+- `tests/perf_game.gd` und `tests/capture_game.gd` setzen `Game.broken_loot = false`.
+
+### 27.8 Offen
+
+- Nichts davon ist von einem Menschen gespielt oder angehört. Material-Zahlen, Paketpreise und
+  alle Lautstärken sind nur gerechnet.
+- Das Banner am Wellenende nennt das Material nicht (die Anzeige im HUD zeigt „+2“).
+- Beim Verschrotten erklingen Zerknüllen und Klimpern gleichzeitig.
+
+## 28. Bildrate: Messlatte, Engpässe, Änderungen (Stand 2026-11-22)
+
+Wo ältere Abschnitte widersprechen (15, 27.4, 27.7), gilt dieser Abschnitt.
+
+### 28.1 Messlatte `tests/perf_late.gd`
+
+Kein Test, braucht ein Fenster (etwa 90 s). Misst den Dauerzustand in schweren Lagen bei
+1920 × 1080 mit den gespeicherten Einstellungen (gelesen, nie geschrieben, kein Spielstand):
+
+- a leere Bühne, b 48 Zombies aus Welle 22 (30 Schlurfer, 16 Sprinter, 2 Elite), c wie b mit
+  Dauerfeuer (c1 Applausmaschine, c2 Flammenwerfer, c3 Raketen), d wie c mit zehn Kameras,
+  Discokugel, Störsender, Minen und allen Räumen offen, p wie d pausiert (Vergleichswert für e
+  und f), e Rucksack offen (volles Raster, 30 im Regal), f Kistenwahl offen.
+- Je Lage: Mittel, Bilder je Sekunde, 1-%-Tief, längstes Bild, Zerlegung (Skript, Physik, Server,
+  Zeichnen und Rest), Monitore. Zeile `PERF|…` zum Auswerten.
+- Fester Zufall, feste Plätze, fester `look_seed`. Das Fenster nimmt keine Eingaben an.
+- Schalter hinter `--`: `lagen=`, `sek=`, `groesse=`, `msaa=`, `skala=`, `aus=` (Verdächtige
+  abschalten), `ruhig=`, `versteckt=`, `inventur`, `takt`, `spur=<Datei>` (Spielstand je
+  Physikschritt), `bilder=<name>` (Fotos nach `_shots/`). Die Liste steht im Kopf des Skripts.
+- Mit `--fixed-fps 60 -- takt aus=ton` ist ein Lauf Schritt für Schritt gleich. Mit Ton nicht:
+  Das Raunen des Publikums (`sfx.gd`) läuft nach echter Zeit und verbraucht globale Zufallszahlen.
+- Vor jedem Lauf mit `tasklist` prüfen, dass `ZombieShooter.exe` nicht läuft. Streuung über drei
+  Läufe 1 bis 4 %, zwischen ruhigem und belegtem Rechner bis 10 %.
+
+### 28.2 Engpässe (gemessen, Rechner des Nutzers: RX 7900 GRE, i7-13700KF)
+
+Das Spiel hängt am Prozessor (ein Thread), nicht an der Grafikkarte.
+
+1. Sprungproben der Zombies (`_try_hop`): im Gedränge bis zu neun `test_move` je Zombie und
+   Schritt gegen andere Zombies, immer umsonst. Über die Hälfte des Physikschritts.
+2. Rucksack-Bildschirm: zeichnete jedes Bild alle Bilder der Gegenstände neu (32 ms je Bild).
+3. Treiber ANGLE: Faktor 2,1 bis 3,0 gegenüber dem OpenGL-Treiber der Grafikkarte (a 1,86 gegen
+   0,62 ms, d 9,57 gegen 4,21 ms). Nicht geändert, siehe 28.5.
+4. „Auflösung 3D“ unter 100 %: +9 bis 11 ms je Bild, gleich bei 50, 75 oder 95 %. Liegt an ANGLE
+   (mit dem OpenGL-Treiber weg), nicht am Licht aus Abschnitt 27.4. Im Projekt nicht behebbar.
+5. Zehn Kameras samt HUD-Zeilen: 1,8 bis 2,5 ms in Lage d.
+6. HUD: 0,4 ms leer, 1,5 bis 2,2 ms in Lage d (Buff-Leiste davon 0,75 bis 1,2 ms).
+7. Zombie-Körper: 706 Zeichenaufrufe für 48 Zombies, 1,3 bis 1,95 ms.
+8. Level-Geometrie 1,0 ms, `move_and_slide` 27 bis 35 µs je Zombie und Schritt, Animation der
+   Zombies 0,38 ms, alle Punktlichter samt Schatten 0,74 ms.
+
+Unwichtig (unter 0,1 ms oder nicht messbar): Glühen, Dunst, Ton, `StudioShow`, Publikum,
+Trennungskräfte, Wegsuche, Sichtstrahlen. Kantenglättung 8-fach und die Fenstergröße
+(1280 × 720 gegen 1920 × 1080) kosten hier höchstens 0,1 ms.
+
+### 28.3 Änderungen
+
+- `zombie.gd`: `_try_hop` läuft nur noch, wenn `_touches_world_wall()` einen Kontakt mit etwas
+  meldet, das kein `CharacterBody3D` ist und dessen Normale flacher als `WALL_NORMAL_MAX_Y` (0,72)
+  steht. Zombies und Spieler lösen keine Proben mehr aus. Das Verhalten ist gleich (Spur über 2616
+  Physikschritte: Lage aller Zombies, Leben, `Game.rng`, Kills, Kisten).
+- `zombie.gd`: Der Körper naher Zombies wird einmal je Physikschritt gestellt statt bis 100-mal
+  je Sekunde (`POSE_WITH_PHYSICS`, spätestens nach `POSE_MAX_WAIT` 0,05 s). Flammen, Giftblasen,
+  Elite-Licht und Flackern laufen im selben Takt. Ausholen, Schlag, Treffer und Erscheinen
+  bleiben in jedem Bild. Über 60 B/s bewegen sich die Glieder im 60er-Takt wie der Zombie selbst.
+  `_animate_alive` gibt `bool` zurück, `_update_material`, `_animate_flames`, `_animate_poison`
+  haben den Parameter `posed`.
+- `backpack_screen.gd`: Zeichnen auf Flächen verteilt (`board_faces`, `board_top`, `shelf_top`).
+  Die Bilder der Gegenstände zeichnen sich nur bei Änderung, die Flächen darüber nur bei Änderung
+  oder solange etwas pulsiert. Reihenfolge und Aussehen wie vorher.
+- `settings_menu.gd`, `settings.gd`: Der Hinweis zu „Auflösung 3D“ verspricht kein „schneller“
+  mehr.
+- Tests: `test_zombies_waves.gd` (keine Proben an Zombies, Meldung an einer Weltwand, Körper-Takt),
+  `test_backpack_screen.gd` (in Ruhe kein Neuzeichnen, je Änderung genau die richtige Fläche).
+- Keine neue Material-Art (22), keine neue Einstellung, kein neues Signal.
+
+### 28.4 Vorher und nachher (Mittel je Bild, je drei Läufe abwechselnd alt und neu)
+
+| Lage | ms vorher → nachher | B/s vorher → nachher | 1-%-Tief ms |
+|---|---|---|---|
+| a leere Bühne | 1,88 → 1,86 | 532 → 538 | 3,3 → 2,6 |
+| b 48 Zombies | 5,38 → 3,91 | 186 → 256 | 10,4 → 6,3 |
+| c Dauerfeuer | 8,44 → 5,82 | 118 → 172 | 16,1 → 10,8 |
+| d Kameras, alles offen | 14,15 → 9,57 | 71 → 105 | 20,4 → 15,0 |
+| p wie d, pausiert | 4,36 → 4,34 | 230 → 230 | 5,5 → 5,4 |
+| e Rucksack | 32,10 → 8,67 | 31 → 115 | 34,5 → 9,8 |
+| f Kistenwahl | 6,08 → 6,08 | 164 → 164 | 7,5 → 7,7 |
+
+Ein einzelner Kontrolllauf danach bei belegtem Rechner: b 4,43, c 6,42, d 10,02, e 8,92 ms.
+Die Fotos `_shots/perf_before_*.png` und `perf_after_*.png` sind Byte für Byte gleich (aufgenommen
+mit festen 60 Bildern je Sekunde, der Körper-Takt bei höherer Bildrate ist nicht fotografiert).
+`run_tests.ps1`: 23 Dateien bestanden. `perf_game.gd`: 22 Material-Arten, kein Shader-Ruckler.
+
+### 28.5 Noch zu holen (nicht gebaut)
+
+1. OpenGL-Treiber der Grafikkarte statt ANGLE: gemessen a 0,62, b 1,51, c 2,55, d 4,21, e 4,09,
+   f 2,53 ms. Preis: Vorwärmen 10 bis 11 s bei jedem Start statt 0,3 s und einzelne Bilder von 30
+   bis 33 ms. Das ist die Abwägung aus Abschnitt 15, entscheidet der Nutzer. Sinnvoll wäre eine
+   Einstellung mit Neustart, kein fester Wechsel.
+2. Zombie als ein Netz mit Skelett (11 → 1 Zeichenaufruf): geschätzt 1,0 bis 1,3 ms in b, großer
+   Aufwand, neue Shader-Variante.
+3. Bilder aus `ItemIcons` einmal in eine Textur zeichnen: geschätzt Rucksack 8,7 → 5 ms, HUD in d
+   0,5 bis 1,0 ms, Kistenwahl 1 ms.
+4. Kamera-Modelle und Level je Material zusammenfassen: geschätzt je 0,3 bis 0,5 ms in d.
+5. Jolt-Physik: gemessen 0,3 bis 0,4 ms je Schritt, Risiko anderes Laufgefühl.
+6. `--render-thread separate` startet mit ANGLE nicht („Error initializing GLAD“).
+
+## 29. Einstellung „Grafik-Unterbau“ (Stand 2026-11-22)
+
+Wo Abschnitt 15 oder 28.5 widersprechen, gilt dieser Abschnitt.
+
+### 29.1 Was der Spieler sieht
+
+- Neue Zeile „GRAFIK-UNTERBAU“ in den Einstellungen (zwölf Zeilen, `ROW_START_Y` 124, `ROW_STEP` 40,
+  die Fußzeile endet bei 682 von 690 Punkten der Ansicht im Pausemenü).
+- „Sicher“ (Standard) = ANGLE über Direct3D 11: Vorwärmen 0,3 bis 0,4 s, kein Shader-Ruckler.
+- „Schnell“ = OpenGL-Treiber der Grafikkarte: gemessen 2,3- bis 2,7-fache Bildrate, dafür Vorwärmen
+  bei jedem Start 11 s (aus den Quellen) bis 15 s (EXE) und einzelne Ruckler.
+- Die Wahl gilt erst nach einem Neustart. Solange ein anderer Unterbau läuft als gewählt, steht
+  am Knopf „(Neustart)“. Das Ladebild nennt mit „Schnell“ die längere Wartezeit
+  (`Warmup.loading_text(driver)`).
+
+### 29.2 Technik
+
+- `project.godot`: `application/config/project_settings_override="user://start.cfg"`. Godot liest
+  diese Datei beim Start selbst, vor dem ersten Skript. Sie enthält genau einen Wert:
+  Abschnitt `rendering`, Schlüssel `gl_compatibility/driver.windows`, Wert `opengl3_angle` oder
+  `opengl3`. Fehlt die Datei, gilt `project.godot` (ANGLE).
+- `settings.gd`: `graphics_driver` (`DRIVER_SAFE` 0, `DRIVER_FAST` 1), `DRIVER_IDS`, `DRIVER_NAMES`,
+  `START_PATH`, `set_graphics_driver`, `active_driver()` (aus
+  `RenderingServer.get_current_rendering_driver_name()`), `restart_needed()`,
+  `load_start_from(path)`, `save_start_to(path)`. Die Wahl steht nur in der Startdatei, nicht in
+  `settings.cfg`: Es gibt eine Quelle. `ensure_loaded` liest beide Dateien, `save` schreibt beide.
+  „STANDARD“ stellt auf „Sicher“ zurück.
+- Headless (Tests) wird die Startdatei nicht geschrieben. Gelesen wird sie von der Engine immer,
+  auch headless: `active_driver()` kann in Tests deshalb 0 oder 1 sein. Tests rechnen relativ dazu.
+- Die Kommandozeile schlägt die Startdatei: Messungen mit Fenster (`perf_late.gd`, `perf_game.gd`,
+  `capture_game.gd`) nennen den Treiber ausdrücklich (`--rendering-driver opengl3_angle` oder
+  `opengl3`), sonst messen sie mit der Wahl des Nutzers.
+- Startet der OpenGL-Treiber nicht, fällt Godot von selbst auf ANGLE zurück
+  (`rendering/gl_compatibility/fallback_to_angle`, Vorgabe an). Der Knopf zeigt dann weiter
+  „(Neustart)“.
+
+### 29.3 Messung (ein Lauf je Unterbau, 1920 × 1080, Einstellungen des Nutzers)
+
+| Lage | Sicher ms / B/s | Schnell ms / B/s | 1-%-Tief Sicher → Schnell |
+|---|---|---|---|
+| a leere Bühne | 2,05 / 487 | 0,64 / 1564 | 2,8 → 1,4 ms |
+| b 48 Zombies | 4,43 / 226 | 1,66 / 604 | 6,6 → 4,4 ms |
+| c Dauerfeuer | 6,42 / 156 | 2,40 / 417 | 10,7 → 6,3 ms |
+| d Kameras, alles offen | 10,02 / 100 | 4,01 / 249 | 15,2 → 7,9 ms |
+| e Rucksack | 8,92 / 112 | 4,22 / 237 | 11,0 → 7,2 ms |
+| f Kistenwahl | 6,50 / 154 | 2,52 / 397 | 7,5 → 4,6 ms |
+
+`perf_game.gd` mit „Schnell“: 7 Bilder über 25 ms, längstes 117 ms (im Dauerfeuer mit sechs Waffen),
+mit „Sicher“ 1 Bild, längstes 30 ms. Ein bis zwei davon sind in beiden Fällen Waffenwechsel der
+Messung. Die übrigen sind Shader, die der Treiber trotz Vorwärmen beim ersten Auftreten noch einmal
+anfasst. Nicht untersucht, welche.
+
+Geprüft mit der EXE: Mit Startdatei `opengl3` meldet das Protokoll den OpenGL-Treiber (Vorwärmen
+15,2 s), ohne Datei ANGLE (0,4 s). `settings.cfg` und `progress.cfg` des Nutzers blieben dabei
+unverändert, die Startdatei der Probe ist wieder gelöscht.

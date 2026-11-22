@@ -245,6 +245,15 @@ func _set_upgrades(levels: Dictionary) -> void:
 
 
 ## Erzeugt einen Zombie über den echten Spawner und stellt ihn an eine Stelle.
+## Zahl der lebenden Zombies.
+func _alive_zombies() -> int:
+	var alive: int = 0
+	for node: Node in get_nodes_in_group("zombies"):
+		if not bool(node.get("is_dead")):
+			alive += 1
+	return alive
+
+
 func _spawn(type: String, at: Vector3, wave: int = 1) -> Node3D:
 	var zombie: Node3D = (_main.get("spawner") as Node).call("spawn", type, wave) as Node3D
 	zombie.call("teleport_to", at)
@@ -977,7 +986,12 @@ func _test_death_and_game_over() -> void:
 	# Vier Schlurfer rund um den Spieler, niemand schießt, niemand heilt.
 	for offset: Vector3 in [Vector3(1.3, 0.0, 0.0), Vector3(-1.3, 0.0, 0.0), Vector3(0.0, 0.0, 1.3), Vector3(0.0, 0.0, -1.3)]:
 		_spawn("walker", player.global_position + offset, 3)
-	var over: bool = await _wait_until(func() -> bool: return _state() == STATE_GAME_OVER, 90.0)
+	# Kameras oder andere Gegenstände aus den Kisten davor können einzelne Schlurfer töten:
+	# Dann rückt Nachschub an, bis der Spieler fällt.
+	var over: bool = await _wait_until(func() -> bool:
+		if _state() == STATE_PLAYING and _alive_zombies() < 4:
+			_spawn("walker", player.global_position + Vector3(1.3, 0.0, 0.0), 3)
+		return _state() == STATE_GAME_OVER, 90.0)
 	_check(over, "Ohne Gegenwehr stirbt der Spieler: State GAME_OVER.")
 	if not over:
 		return

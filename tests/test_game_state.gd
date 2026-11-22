@@ -178,6 +178,7 @@ func _test_event_signals() -> void:
 		"player_shield_changed": 2, "dash_charges_changed": 2, "player_dashed": 0, "explosion": 2,
 		"cameras_changed": 0, "camera_fired": 2, "mine_placed": 1, "mine_triggered": 1,
 		"player_revived": 0, "revive_charges_changed": 2, "bank_changed": 2, "pack_unlocked": 1,
+		"materials_changed": 2, "item_repaired": 1, "item_scrapped": 2,
 	}
 	var found: Dictionary = {}
 	for entry: Dictionary in (_events.get_script() as Script).get_script_signal_list():
@@ -188,7 +189,7 @@ func _test_event_signals() -> void:
 			_check(int(found[signal_name]) == int(expected[signal_name]), "Signal %s hat %d Argumente, erwartet %d." % [signal_name, found[signal_name], expected[signal_name]])
 	for signal_name: String in found:
 		_check(expected.has(signal_name), "Signal %s steht nicht im Vertrag." % signal_name)
-	_check(found.size() == 44, "Events hat genau 44 Signale, waren %d." % found.size())
+	_check(found.size() == 47, "Events hat genau 47 Signale, waren %d." % found.size())
 
 
 func _test_initial_and_start() -> void:
@@ -208,6 +209,8 @@ func _test_initial_and_start() -> void:
 	_check(_game.state == _game.State.PLAYING, "Nach start_run ist der State PLAYING.")
 	_check(not paused, "Nach start_run ist die Pause aus.")
 	_check(_game.points == 0 and _game.kills == 0 and _game.wave == 0 and _game.total_points_earned == 0, "start_run setzt Punkte, Kills und Welle zurück.")
+	_check(_game.materials == Balance.MATERIAL_START, "start_run setzt das Material auf den Startwert, war %d." % _game.materials)
+	_check(not _game.broken_loot, "Ohne Bildschirm sind Fundstücke aus Kisten heil (broken_loot aus).")
 	_check(_game.upgrades != old_upgrades and _game.upgrades.owned_ids().is_empty(), "start_run legt die Upgrades neu an.")
 	_check(_count("run_started") == runs_before + 1, "start_run sendet run_started genau einmal.")
 	_check(_last("points_changed") == [0], "start_run sendet points_changed(0).")
@@ -500,8 +503,9 @@ func _test_end_run() -> void:
 	_check(paused, "Game Over pausiert das Spiel.")
 	_check(_count("game_over") == overs + 1, "game_over kam genau einmal.")
 	var stats: Dictionary = _last("game_over")[0]
-	for key: String in ["wave", "kills", "points", "upgrades", "synergies", "character", "items", "cameras", "bank_gained", "bank"]:
+	for key: String in ["wave", "kills", "points", "upgrades", "synergies", "character", "items", "cameras", "bank_gained", "bank", "materials"]:
 		_check(stats.has(key), "stats hat den Schlüssel %s." % key)
+	_check(int(stats["materials"]) == Balance.MATERIAL_START, "stats nennt das Material des Laufs, war %s." % stats["materials"])
 	_check(int(stats["wave"]) == 5 and int(stats["kills"]) == 1, "stats: Welle 5, 1 Kill, war %s." % [stats])
 	_check(int(stats["points"]) == 760, "stats: 760 verdiente Punkte (Ausgaben zählen nicht ab), waren %s." % stats["points"])
 	var rows: Array = stats["upgrades"]

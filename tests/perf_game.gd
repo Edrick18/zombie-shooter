@@ -77,6 +77,8 @@ func _run() -> void:
 	# Dieses Werkzeug darf den echten Spielstand (Konto, Pakete) nie anfassen.
 	_game.set("progress_file_enabled", false)
 	(_game.get("progress") as RefCounted).set("unlock_all", true)
+	# Fundstücke kommen hier heil an: Die Messung räumt selbst ein und repariert nichts.
+	_game.set("broken_loot", false)
 	_events = root.get_node("Events")
 	if OS.get_cmdline_user_args().has("trace"):
 		_trace_on = true

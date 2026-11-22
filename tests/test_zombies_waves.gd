@@ -16,7 +16,23 @@ const WavePlan := preload("res://scripts/core/wave_plan.gd")
 const ZOMBIE_PATH: String = "res://scripts/game/zombies/zombie.gd"
 const SPAWNER_PATH: String = "res://scripts/game/zombies/zombie_spawner.gd"
 const WAVE_MANAGER_PATH: String = "res://scripts/game/zombies/wave_manager.gd"
+const BODY_PATH: String = "res://scripts/game/zombies/zombie_body.gd"
+const LOOK_PATH: String = "res://scripts/game/zombies/zombie_look.gd"
 const EPSILON: float = 0.01
+const TYPES: Array[String] = ["walker", "sprinter", "elite"]
+## Die elf Teile des sichtbaren Körpers: Pfade unter dem Knoten Body und Namen für get_part.
+const PART_PATHS: Array[String] = [
+	"Rig/Hips/Torso", "Rig/Hips/Torso/Head", "Rig/Hips/Torso/Head/Eyes",
+	"Rig/Hips/Torso/ArmL", "Rig/Hips/Torso/ArmL/Fore", "Rig/Hips/Torso/ArmR", "Rig/Hips/Torso/ArmR/Fore",
+	"Rig/Hips/LegL", "Rig/Hips/LegL/Shin", "Rig/Hips/LegR", "Rig/Hips/LegR/Shin",
+]
+const PART_NAMES: Array[String] = [
+	"torso", "head", "eyes", "arm_l", "fore_l", "arm_r", "fore_r", "leg_l", "shin_l", "leg_r", "shin_r",
+]
+## Leistung: höchstens so viele MeshInstance3D je Zombie (jeder sichtbare ist ein Zeichenaufruf),
+## und höchstens so viele, wenn er zugleich brennt, vergiftet, verlangsamt und markiert ist.
+const MESH_LIMIT: int = 14
+const MESH_LIMIT_ALL_STATES: int = 17
 
 
 ## Ersatz-Spieler: merkt sich Schläge und Heilung.
@@ -78,6 +94,11 @@ func _run() -> void:
 		_game.call("start_run", 11)
 		_game.set("player", _player)
 		_test_setup_and_shape()
+		_test_body_parts()
+		_test_head_zone()
+		_test_body_motion()
+		await _test_death_looks()
+		await _test_look_keeps_seed()
 		await _test_damage_and_death()
 		_test_burn()
 		_test_elite_burn_factor()
@@ -93,6 +114,8 @@ func _run() -> void:
 		_test_stuck_safety()
 		_test_count_repair()
 		await _test_navigation_and_hop()
+		await _test_hop_only_at_world_walls()
+		_test_pose_follows_physics()
 		paused = false
 		_world.queue_free()
 		await process_frame
@@ -198,6 +221,12 @@ func _make_zombie(type: String, wave: int, position: Vector3) -> CharacterBody3D
 	return zombie
 
 
+## Lässt die Aufricht-Animation nach dem Erscheinen zu Ende laufen (nur Optik, ohne Physik).
+func _settle(zombie: Node) -> void:
+	for i: int in 8:
+		zombie.call("_process", 0.25)
+
+
 ## Treibt einen Zombie ohne echte Bilder an: seconds in festen Schritten.
 func _step_zombie(zombie: Node, seconds: float, step: float = 0.1) -> void:
 	for i: int in roundi(seconds / step):
@@ -255,10 +284,12 @@ func _test_setup_and_shape() -> void:
 	_check(walker.collision_layer == Balance.LAYER_ZOMBIES, "Zombie liegt auf Lage 3.")
 	_check(walker.collision_mask == Balance.MASK_ZOMBIE, "Zombie hat die Maske 1 + 2 + 3.")
 	_check(walker.get_node_or_null("Shape") is CollisionShape3D, "Zombie hat den Knoten Shape.")
-	_check(walker.get_node_or_null("Body") is MeshInstance3D, "Zombie hat den Knoten Body.")
+	_check(walker.get_node_or_null("Body") is Node3D, "Zombie hat den Knoten Body.")
 	_check(walker.get_node_or_null("NavAgent") is NavigationAgent3D, "Zombie hat einen NavigationAgent3D.")
-	_check(walker.get_node_or_null("Body/ArmL") != null and walker.get_node_or_null("Body/ArmR") != null,
+	_check(walker.get_node_or_null("Body/Rig/Hips/Torso/ArmL") != null and walker.get_node_or_null("Body/Rig/Hips/Torso/ArmR") != null,
 			"Zombie hat zwei Arme.")
+	_check(walker.get_node_or_null("Body/Rig/Hips/LegL") != null and walker.get_node_or_null("Body/Rig/Hips/LegR") != null,
+			"Zombie hat zwei Beine.")
 
 	var late_walker: CharacterBody3D = _make_zombie("walker", 5, Vector3(22.0, 0.0, 20.0))
 	_check_near(float(late_walker.get("max_hp")), WavePlan.zombie_hp("walker", 5), "Schlurfer Welle 5: Leben nach WavePlan.")
@@ -290,8 +321,8 @@ func _test_setup_and_shape() -> void:
 		_check(bool(zombie.call("is_headshot", feet + Vector3(0.0, limit + 0.02, 0.0))), "%s: knapp über der Grenze ist ein Kopftreffer." % label)
 		_check(not bool(zombie.call("is_headshot", feet + Vector3(0.0, limit - 0.02, 0.0))), "%s: knapp unter der Grenze ist kein Kopftreffer." % label)
 		# Aufricht-Animation zu Ende laufen lassen, dann steht der Kopf an seinem Platz.
-		zombie.call("_process", 1.0)
-		var head: Node3D = zombie.get_node("Body/Head") as Node3D
+		_settle(zombie)
+		var head: Node3D = zombie.get_node("Body/Rig/Hips/Torso/Head") as Node3D
 		var head_height: float = head.global_position.y - feet.y
 		_check(head_height > limit and head_height < height, "%s: Der sichtbare Kopf liegt im Kopftreffer-Bereich (%.2f von %.2f)." % [label, head_height, height])
 		_check(_flat_distance(head.global_position, feet) < float(zombie.get("body_radius")),
@@ -299,6 +330,565 @@ func _test_setup_and_shape() -> void:
 		var center: Vector3 = zombie.call("get_center_position")
 		_check_near(center.y - feet.y, height * 0.5, "%s: get_center_position ist die Körpermitte." % label)
 	_remove_all_zombies()
+	_game.set("player", _player)
+
+
+# --- Der sichtbare Körper (zombie_body.gd, zombie_look.gd) -----------------------------------
+
+func _make_seeded(type: String, look_seed: int, position: Vector3) -> CharacterBody3D:
+	var zombie: CharacterBody3D = _zombie_script.new()
+	zombie.call("setup", type, 1)
+	zombie.set("look_seed", look_seed)
+	zombie.position = position
+	_zombies_root.add_child(zombie)
+	return zombie
+
+
+func _body_of(zombie: Node) -> Node3D:
+	return zombie.call("get_body") as Node3D
+
+
+func _part(zombie: Node, part_name: String) -> MeshInstance3D:
+	return _body_of(zombie).call("get_part", part_name) as MeshInstance3D
+
+
+## Zählt Knoten einer Klasse unter node (node selbst eingeschlossen).
+func _count_class(node: Node, type_name: String) -> int:
+	var count: int = 1 if node.is_class(type_name) else 0
+	for child: Node in node.get_children():
+		count += _count_class(child, type_name)
+	return count
+
+
+## Zählt die sichtbaren MeshInstance3D unter node: Das sind die Zeichenaufrufe.
+func _count_visible_meshes(node: Node) -> int:
+	var node_3d: Node3D = node as Node3D
+	if node_3d != null and not node_3d.visible:
+		return 0
+	var count: int = 1 if node is MeshInstance3D else 0
+	for child: Node in node.get_children():
+		count += _count_visible_meshes(child)
+	return count
+
+
+## Teile vorhanden, Typen unterscheiden sich, Zahl der Netze unter der Grenze, Netze und
+## Materialien werden geteilt, jedes Exemplar sieht etwas anders aus.
+func _test_body_parts() -> void:
+	_game.set("player", null)
+	var look: GDScript = load(LOOK_PATH) as GDScript
+	_check(look != null and load(BODY_PATH) is GDScript, "zombie_look.gd und zombie_body.gd laden.")
+	if look == null:
+		return
+	var by_type: Dictionary = {}
+	var x: float = 20.0
+	for type: String in TYPES:
+		var zombie: CharacterBody3D = _make_seeded(type, 7, Vector3(x, 0.0, 30.0))
+		x += 3.0
+		by_type[type] = zombie
+		var body: Node3D = _body_of(zombie)
+		_check(body != null and body == zombie.get_node_or_null("Body"), "%s: Der Körper ist der Knoten Body." % type)
+		if body == null:
+			continue
+		var complete: bool = true
+		for path: String in PART_PATHS:
+			var part: MeshInstance3D = body.get_node_or_null(path) as MeshInstance3D
+			if part == null or part.mesh == null or part.mesh.get_surface_count() != 1:
+				complete = false
+		_check(complete, "%s: Rumpf, Kopf mit Augen, zwei Arme mit Unterarm, zwei Beine mit Unterschenkel, je ein Netz mit einer Fläche." % type)
+		_check(int(body.call("get_mesh_count")) == 11, "%s: Der Körper besteht aus elf Netzen (sind %d)." % [type, int(body.call("get_mesh_count"))])
+		var total: int = int(zombie.call("get_mesh_count"))
+		var visible: int = _count_visible_meshes(zombie)
+		_check(total <= MESH_LIMIT, "%s: höchstens %d MeshInstance3D je Zombie (sind %d)." % [type, MESH_LIMIT, total])
+		_check(visible <= MESH_LIMIT - 1, "%s: Im Normalfall werden höchstens %d Netze gezeichnet (sind %d)." % [type, MESH_LIMIT - 1, visible])
+		var lights: int = _count_class(zombie, "Light3D")
+		_check(lights == (1 if type == "elite" else 0), "%s: kein neues Licht am Zombie (Lichter: %d)." % [type, lights])
+		_check(_count_class(body, "CollisionObject3D") == 0 and _count_class(body, "CollisionShape3D") == 0, "%s: Der Körper hat keine eigene Kollision." % type)
+		# Alle Zustände zugleich: Brand, Gift, Kälte, Markierung.
+		zombie.call("apply_burn", 0.01, 5.0)
+		zombie.call("apply_poison", 0.01, 5.0)
+		zombie.call("apply_slow", 0.3, 5.0)
+		zombie.call("apply_mark", 0.3, 5.0)
+		zombie.call("_process", 0.016)
+		var loaded: int = _count_visible_meshes(zombie)
+		_check(loaded <= MESH_LIMIT_ALL_STATES, "%s: Auch brennend, vergiftet, verlangsamt und markiert höchstens %d Netze (sind %d)." % [type, MESH_LIMIT_ALL_STATES, loaded])
+		var flames: Node3D = body.get_node_or_null("Flames") as Node3D
+		var poison: Node3D = body.get_node_or_null("Poison") as Node3D
+		var mark: Node3D = zombie.get_node_or_null("Mark") as Node3D
+		_check(flames != null and flames.visible, "%s: Brand zeigt Flammen am Körper." % type)
+		_check(poison != null and poison.visible, "%s: Gift zeigt Blasen am Körper (Body/Poison)." % type)
+		_check(mark != null and mark.visible and mark.position.y > float(zombie.get("body_height")), "%s: Die Markierung steht über dem Kopf." % type)
+		_check(bool(body.call("is_tinted")), "%s: Brand, Gift und Kälte färben den Körper." % type)
+
+	# --- Die drei Typen unterscheiden sich an der Form ---
+	var walker: CharacterBody3D = by_type["walker"]
+	var sprinter: CharacterBody3D = by_type["sprinter"]
+	var elite: CharacterBody3D = by_type["elite"]
+	var shoulders: Dictionary = {}
+	var arms: Dictionary = {}
+	var leans: Dictionary = {}
+	for type: String in TYPES:
+		var zombie: CharacterBody3D = by_type[type]
+		var height: float = float(zombie.get("body_height"))
+		var metrics: Dictionary = look.call("get_metrics", type)
+		shoulders[type] = _part(zombie, "arm_r").position.x / height
+		arms[type] = float(metrics["upper_arm"]) + float(metrics["forearm"]) + float(metrics["hand"])
+		leans[type] = _part(zombie, "torso").rotation.x
+	_check(float(shoulders["sprinter"]) < float(shoulders["walker"]) * 0.9 and float(shoulders["elite"]) > float(shoulders["walker"]) * 1.15,
+			"Schultern: Sprinter schmal, Elite breit (%.3f / %.3f / %.3f der Höhe)." % [shoulders["sprinter"], shoulders["walker"], shoulders["elite"]])
+	_check(float(arms["sprinter"]) > float(arms["walker"]) * 1.2, "Der Sprinter hat lange Arme (%.2f gegen %.2f der Höhe)." % [arms["sprinter"], arms["walker"]])
+	_check(float(leans["sprinter"]) < float(leans["walker"]) - 0.05 and float(leans["walker"]) < float(leans["elite"]) - 0.05,
+			"Haltung: Sprinter am weitesten vorgebeugt, Schlurfer gebeugt, Elite aufrecht (%.2f / %.2f / %.2f)." % [leans["sprinter"], leans["walker"], leans["elite"]])
+	_check(float(elite.get("body_height")) > float(walker.get("body_height")) * 1.25, "Die Elite ist deutlich größer.")
+	var torsos_differ: bool = _part(walker, "torso").mesh != _part(sprinter, "torso").mesh and _part(walker, "torso").mesh != _part(elite, "torso").mesh
+	_check(torsos_differ and _part(walker, "head").mesh != _part(sprinter, "head").mesh, "Jeder Typ hat eigene Netze für Rumpf und Kopf.")
+	var eye_colors: Array[Color] = []
+	for type: String in TYPES:
+		var eye_material: StandardMaterial3D = _part(by_type[type], "eyes").mesh.surface_get_material(0) as StandardMaterial3D
+		_check(eye_material != null and eye_material.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED, "%s: Die Augen leuchten (unbeleuchtetes Material)." % type)
+		if eye_material != null:
+			eye_colors.append(eye_material.albedo_color)
+	_check(eye_colors.size() == 3 and eye_colors[0] != eye_colors[1] and eye_colors[1] != eye_colors[2] and eye_colors[0] != eye_colors[2], "Jeder Typ hat eine eigene Augenfarbe.")
+	var elite_material: StandardMaterial3D = look.call("body_material", "elite")
+	var walker_material: StandardMaterial3D = look.call("body_material", "walker")
+	_check(elite_material.emission_enabled and elite_material.emission.get_luminance() > 0.05, "Die Elite leuchtet von selbst.")
+	_check(walker_material.emission.get_luminance() < 0.001, "Der Schlurfer leuchtet nicht.")
+	_check(walker_material.vertex_color_use_as_albedo and walker_material.emission_enabled, "Material-Art des Körpers: Vertexfarben und Leuchten.")
+	_remove_all_zombies()
+
+	# --- Netze und Materialien werden geteilt ---
+	var first: CharacterBody3D = _make_seeded("walker", 7, Vector3(20.0, 0.0, 30.0))
+	var twin: CharacterBody3D = _make_seeded("walker", 7, Vector3(23.0, 0.0, 30.0))
+	var same_meshes: bool = true
+	var same_material: bool = true
+	var untinted: bool = true
+	for part_name: String in PART_NAMES:
+		var a: MeshInstance3D = _part(first, part_name)
+		var b: MeshInstance3D = _part(twin, part_name)
+		if a.mesh != b.mesh:
+			same_meshes = false
+		if part_name != "eyes" and a.mesh.surface_get_material(0) != walker_material:
+			same_material = false
+		if a.material_override != null or b.material_override != null:
+			untinted = false
+	_check(same_meshes, "Zwei Schlurfer derselben Variante teilen jedes Netz.")
+	_check(same_material, "Alle Körperteile eines Typs teilen ein Material.")
+	_check(untinted, "Ohne Treffer und Zustand hat kein Körperteil ein eigenes Material.")
+	_check(int(_body_of(first).get("variant")) == int(_body_of(twin).get("variant"))
+			and (_body_of(first).call("get_size_factors") as Vector3) == (_body_of(twin).call("get_size_factors") as Vector3),
+			"Gleiche look_seed, gleiches Aussehen.")
+	_remove_all_zombies()
+	for round_index: int in 2:
+		for i: int in 60:
+			_make_seeded(TYPES[i % 3], 100 + i + round_index * 1000, Vector3(20.0 + float(i % 10), 0.0, 30.0 + float(i / 10)))
+		if round_index == 0:
+			_check(int(look.call("built_look_count")) <= 3 * int(look.get("VARIANT_COUNT")), "Es gibt höchstens Typen mal Varianten gebaute Netz-Sätze (sind %d)." % int(look.call("built_look_count")))
+		var built: int = int(look.call("built_look_count"))
+		_remove_all_zombies()
+		if round_index == 1:
+			_check(built == 3 * int(look.get("VARIANT_COUNT")), "60 weitere Zombies bauen kein neues Netz (Sätze: %d)." % built)
+
+	# --- Jedes Exemplar sieht etwas anders aus ---
+	var variants: Dictionary = {}
+	var widths: Dictionary = {}
+	var in_bounds: bool = true
+	for look_seed: int in 40:
+		var zombie: CharacterBody3D = _make_seeded("walker", look_seed, Vector3(20.0, 0.0, 30.0))
+		var body: Node3D = _body_of(zombie)
+		var size: Vector3 = body.call("get_size_factors")
+		variants[int(body.get("variant"))] = true
+		widths[snappedf(size.x, 0.001)] = true
+		if absf(size.x - 1.0) > 0.0701 or absf(size.y - 1.0) > 0.0351 or not is_equal_approx(size.x, size.z):
+			in_bounds = false
+		zombie.call("despawn")
+	_check(variants.size() == int(look.get("VARIANT_COUNT")), "40 Schlurfer zeigen alle %d Varianten (gesehen: %d)." % [int(look.get("VARIANT_COUNT")), variants.size()])
+	_check(widths.size() >= 20, "Die Größe schwankt je Exemplar (%d verschiedene Breiten bei 40 Zombies)." % widths.size())
+	_check(in_bounds, "Breite weicht höchstens 7 %, Höhe höchstens 3,5 % ab.")
+	_remove_all_zombies()
+	_game.set("player", _player)
+
+
+## Die Trefferzone für den Kopf deckt sich mit dem sichtbaren Kopf: im Stand, bei jedem Exemplar
+## und beim Gehen.
+func _test_head_zone() -> void:
+	_game.set("player", null)
+	var look: GDScript = load(LOOK_PATH) as GDScript
+	var head_share: float = float(look.get("HEAD_RADIUS_SHARE"))
+	for type: String in TYPES:
+		var worst_center: float = 0.0
+		var worst_flat: float = 0.0
+		var lowest: float = INF
+		var highest: float = -INF
+		var walk_low: float = INF
+		var walk_high: float = -INF
+		var walk_flat: float = 0.0
+		var height: float = 0.0
+		var radius: float = 0.0
+		for look_seed: int in 10:
+			var zombie: CharacterBody3D = _make_seeded(type, look_seed, Vector3(20.0, 0.0, 30.0))
+			height = float(zombie.get("body_height"))
+			radius = float(zombie.get("body_radius"))
+			# Aufrichten nach dem Erscheinen zu Ende laufen lassen.
+			_settle(zombie)
+			var feet: Vector3 = zombie.global_position
+			var head: MeshInstance3D = _body_of(zombie).call("get_head")
+			var expected: Vector3 = zombie.call("get_head_position")
+			var center: Vector3 = head.global_position
+			worst_center = maxf(worst_center, absf(center.y - expected.y))
+			worst_flat = maxf(worst_flat, _flat_distance(center, expected))
+			# Sichtbarer Schädel: Kugel um die Kopfmitte, Größe aus dem Maßstab des Knotens.
+			var skull: float = head_share * height * head.global_transform.basis.get_scale().y
+			lowest = minf(lowest, center.y - skull - feet.y)
+			highest = maxf(highest, center.y + skull - feet.y)
+			_check(bool(zombie.call("is_headshot", center)), "%s (Exemplar %d): Ein Treffer in die sichtbare Kopfmitte ist ein Kopfschuss." % [type, look_seed])
+			# Gehen: Der Kopf bleibt im Kopftreffer-Bereich über der Kapsel.
+			zombie.set("_anim_speed", float(zombie.get("move_speed")))
+			for i: int in 90:
+				zombie.call("_process", 1.0 / 60.0)
+				var walking: Vector3 = head.global_position
+				walk_low = minf(walk_low, walking.y - feet.y)
+				walk_high = maxf(walk_high, walking.y - feet.y)
+				walk_flat = maxf(walk_flat, _flat_distance(walking, feet))
+			zombie.call("despawn")
+		var limit: float = height * Balance.HEADSHOT_HEIGHT_RATIO
+		_check(worst_center < height * 0.02, "%s: Die sichtbare Kopfmitte liegt auf der Höhe von get_head_position (Abweichung %.3f m)." % [type, worst_center])
+		_check(worst_flat < radius * 0.6, "%s: Die sichtbare Kopfmitte liegt über den Füßen (waagerecht %.2f m daneben)." % [type, worst_flat])
+		_check(lowest > limit - height * 0.02, "%s: Der sichtbare Kopf beginnt an der Kopftreffer-Grenze (Unterkante %.2f m, Grenze %.2f m)." % [type, lowest, limit])
+		_check(highest < height * 1.02, "%s: Der sichtbare Kopf endet am Scheitel der Kapsel (Oberkante %.2f m von %.2f m)." % [type, highest, height])
+		_check(walk_low > limit + height * 0.04 and walk_high < height * 0.93, "%s: Beim Gehen bleibt die Kopfmitte im Kopftreffer-Bereich (%.2f bis %.2f m)." % [type, walk_low, walk_high])
+		_check(walk_flat < radius, "%s: Beim Gehen bleibt die Kopfmitte über der Kollisionskapsel (%.2f m)." % [type, walk_flat])
+	_remove_all_zombies()
+	_game.set("player", _player)
+
+
+## Bewegung: Schritte im Takt des Tempos, Ausholen und Schlag, Zucken, Taumeln, Aufblitzen.
+func _test_body_motion() -> void:
+	_game.set("player", null)
+	var zombie: CharacterBody3D = _make_seeded("walker", 3, Vector3(20.0, 0.0, 30.0))
+	var body: Node3D = _body_of(zombie)
+	var leg: MeshInstance3D = _part(zombie, "leg_l")
+	var shin: MeshInstance3D = _part(zombie, "shin_l")
+	var arm: MeshInstance3D = _part(zombie, "arm_l")
+	var arm_right: MeshInstance3D = _part(zombie, "arm_r")
+	var torso: MeshInstance3D = _part(zombie, "torso")
+	_settle(zombie)
+	# Stand: Die Beine stehen, der Schritt läuft nicht weiter.
+	var gait_before: float = float(body.get("_gait"))
+	var stand: Vector2 = _swing_range(zombie, leg, 60)
+	_check(stand.y - stand.x < 0.05, "Im Stand stehen die Beine still (Ausschlag %.2f rad)." % (stand.y - stand.x))
+	_check(is_equal_approx(float(body.get("_gait")), gait_before), "Im Stand läuft der Schritt nicht weiter.")
+	# Gehen: Beine und Arme schwingen, das Knie beugt sich.
+	zombie.set("_anim_speed", 1.6)
+	var walk: Vector2 = _swing_range(zombie, leg, 120)
+	var knee: Vector2 = _swing_range(zombie, shin, 120)
+	var arm_swing: Vector2 = _swing_range(zombie, arm_right, 120)
+	_check(walk.y - walk.x > 0.3, "Beim Gehen schwingen die Beine (Ausschlag %.2f rad)." % (walk.y - walk.x))
+	_check(knee.y - knee.x > 0.2 and knee.y <= 0.001, "Das Knie beugt sich beim Gehen und nie nach vorn (%.2f bis %.2f rad)." % [knee.x, knee.y])
+	_check(arm_swing.y - arm_swing.x > 0.1, "Beim Gehen pendeln die Arme (Ausschlag %.2f rad)." % (arm_swing.y - arm_swing.x))
+	# Takt: doppeltes Tempo, mehr Schritte je Sekunde, aber nicht doppelt so viele (längere Schritte).
+	var slow_steps: float = _gait_advance(zombie, 1.0, 60)
+	var fast_steps: float = _gait_advance(zombie, 2.0, 60)
+	_check(slow_steps > 0.3 and fast_steps > slow_steps * 1.2 and fast_steps < slow_steps * 2.0,
+			"Der Schritt folgt dem Tempo (%.2f Doppelschritte je Sekunde bei 1 m/s, %.2f bei 2 m/s)." % [slow_steps, fast_steps])
+	var runner: CharacterBody3D = _make_seeded("sprinter", 3, Vector3(24.0, 0.0, 30.0))
+	_settle(runner)
+	var run_steps: float = _gait_advance(runner, 5.0, 60)
+	var run_swing: Vector2 = _swing_range(runner, _part(runner, "leg_l"), 60)
+	_check(run_steps > slow_steps * 1.5, "Der Sprinter rennt mit schnelleren Schritten als der Schlurfer (%.2f je Sekunde)." % run_steps)
+	_check(run_swing.y - run_swing.x > (walk.y - walk.x) * 1.2, "Der Sprinter macht größere Schritte (Ausschlag %.2f rad)." % (run_swing.y - run_swing.x))
+	runner.call("despawn")
+
+	# Ausholen: Die Arme gehen über den Kopf, beim Schlag sausen sie herunter und der Rumpf wirft sich vor.
+	zombie.set("_anim_speed", 0.0)
+	for i: int in 60:
+		zombie.call("_process", 1.0 / 60.0)
+	var rest_arm: float = arm.rotation.x + torso.rotation.x
+	var rest_lean: float = torso.rotation.x
+	zombie.set("_windup_left", Balance.ZOMBIE_ATTACK_WINDUP * 0.5)
+	zombie.call("_process", 0.016)
+	var half_arm: float = arm.rotation.x + torso.rotation.x
+	zombie.set("_windup_left", 0.001)
+	zombie.call("_process", 0.016)
+	var raised_arm: float = arm.rotation.x + torso.rotation.x
+	_check(half_arm > rest_arm + 0.5 and raised_arm > half_arm and raised_arm > 2.2,
+			"Ausholen hebt die Arme über den Kopf (%.2f -> %.2f -> %.2f rad)." % [rest_arm, half_arm, raised_arm])
+	_check(torso.rotation.x > rest_lean + 0.1, "Beim Ausholen lehnt sich der Rumpf zurück.")
+	zombie.set("_windup_left", -1.0)
+	zombie.set("_strike_left", 0.3)
+	for i: int in 6:
+		zombie.call("_process", 0.016)
+	_check(arm.rotation.x + torso.rotation.x < raised_arm - 1.2, "Beim Schlag sausen die Arme herunter (%.2f rad)." % (arm.rotation.x + torso.rotation.x))
+	_check(torso.rotation.x < rest_lean - 0.2, "Beim Schlag wirft sich der Rumpf nach vorn.")
+	for i: int in 60:
+		zombie.call("_process", 1.0 / 60.0)
+	_check(absf(torso.rotation.x - rest_lean) < 0.08, "Nach dem Schlag richtet sich der Zombie wieder auf.")
+
+	# Treffer: Aufblitzen (eigenes Material), Zucken, danach wieder das geteilte Material.
+	var calm: Vector3 = torso.rotation
+	var calm_head: float = _part(zombie, "head").rotation.x
+	_check(not bool(body.call("is_tinted")), "Vor dem Treffer benutzt der Körper das geteilte Material.")
+	zombie.call("take_damage", 1.0, {"source": "bullet", "headshot": true})
+	zombie.call("_process", 0.016)
+	_check(bool(body.call("is_tinted")), "Ein Treffer lässt den Körper aufblitzen.")
+	var flash_material: StandardMaterial3D = torso.material_override as StandardMaterial3D
+	_check(flash_material != null and flash_material != torso.mesh.surface_get_material(0)
+			and flash_material.emission.get_luminance() > 0.2 and flash_material.vertex_color_use_as_albedo,
+			"Das Aufblitzen ist ein eigenes, helles Material derselben Art.")
+	var all_flash: bool = true
+	for part_name: String in PART_NAMES:
+		if part_name != "eyes" and _part(zombie, part_name).material_override != flash_material:
+			all_flash = false
+	_check(all_flash and _part(zombie, "eyes").material_override == null, "Der ganze Körper blitzt auf, die Augen behalten ihre Farbe.")
+	_check(_part(zombie, "head").rotation.x > calm_head + 0.2, "Ein Kopftreffer wirft den Kopf zurück.")
+	var twitch: float = 0.0
+	for i: int in 5:
+		zombie.call("_process", 0.02)
+		twitch = maxf(twitch, (torso.rotation - calm).length())
+	_check(twitch > 0.03, "Ein Treffer lässt den Rumpf zucken (%.2f rad)." % twitch)
+	for i: int in 30:
+		zombie.call("_process", 0.02)
+	_check(not bool(body.call("is_tinted")) and torso.material_override == null, "Nach dem Aufblitzen gilt wieder das geteilte Material.")
+	_check((torso.rotation - calm).length() < 0.05, "Das Zucken klingt ab.")
+	# Zwei getroffene Zombies teilen ihr Blitz-Material nicht.
+	var other: CharacterBody3D = _make_seeded("walker", 4, Vector3(26.0, 0.0, 30.0))
+	zombie.call("take_damage", 1.0, {"source": "bullet"})
+	other.call("take_damage", 1.0, {"source": "bullet"})
+	zombie.call("_process", 0.016)
+	other.call("_process", 0.016)
+	_check(torso.material_override != null and torso.material_override != _part(other, "torso").material_override,
+			"Jeder getroffene Zombie blitzt mit seinem eigenen Material.")
+	other.call("despawn")
+	for i: int in 30:
+		zombie.call("_process", 0.02)
+
+	# Rückstoß: Der Körper taumelt in die Stoßrichtung, die Arme rudern.
+	calm = torso.rotation
+	var calm_arm: float = arm.rotation.x + torso.rotation.x
+	zombie.call("apply_knockback", Vector3(0.0, 0.0, 6.0))
+	var stagger: float = 0.0
+	var flail: float = 0.0
+	for i: int in 8:
+		zombie.call("_process", 0.03)
+		stagger = maxf(stagger, (torso.rotation - calm).length())
+		flail = maxf(flail, absf(arm.rotation.x + torso.rotation.x - calm_arm))
+	_check(stagger > 0.2, "Beim Rückstoß taumelt der Rumpf (%.2f rad)." % stagger)
+	_check(flail > 0.5, "Beim Rückstoß rudern die Arme (%.2f rad)." % flail)
+
+	# Verlangsamt: eisblau (mehr Blau als Rot), ohne Aufblitzen ruhig.
+	zombie.set("_knockback", Vector3.ZERO)
+	zombie.call("apply_slow", 0.3, 5.0)
+	zombie.call("_process", 0.016)
+	var ice: StandardMaterial3D = torso.material_override as StandardMaterial3D
+	_check(ice != null and ice.albedo_color.b > ice.albedo_color.r + 0.2 and ice.emission.b > ice.emission.r, "Verlangsamt ist der Körper eisblau gefärbt.")
+	_remove_all_zombies()
+	_game.set("player", _player)
+
+
+## Kleinster und größter Winkel (rotation.x) eines Teils über frames Bilder zu 1/60 s.
+func _swing_range(zombie: Node, part: Node3D, frames: int) -> Vector2:
+	var low: float = INF
+	var high: float = -INF
+	for i: int in frames:
+		zombie.call("_process", 1.0 / 60.0)
+		low = minf(low, part.rotation.x)
+		high = maxf(high, part.rotation.x)
+	return Vector2(low, high)
+
+
+## Zahl der Doppelschritte, die der Körper in frames Bildern zu 1/60 s bei diesem Tempo macht.
+func _gait_advance(zombie: Node, speed: float, frames: int) -> float:
+	var body: Node3D = _body_of(zombie)
+	zombie.set("_anim_speed", speed)
+	var total: float = 0.0
+	var last: float = float(body.get("_gait"))
+	for i: int in frames:
+		zombie.call("_process", 1.0 / 60.0)
+		var now: float = float(body.get("_gait"))
+		total += fposmod(now - last, 1.0)
+		last = now
+	return total
+
+
+## Tod: Der Körper fällt um oder zerfällt, bleibt kurz liegen (ohne Kollision, in einem eigenen
+## Behälter) und verschwindet. Der Zombie selbst ist wie bisher nach ZOMBIE_DEATH_TIME weg.
+func _test_death_looks() -> void:
+	_game.set("player", null)
+	_clear_log()
+	var body_script: GDScript = load(BODY_PATH) as GDScript
+	var corpse_time: float = float(body_script.get("CORPSE_TIME"))
+	_check(corpse_time > Balance.ZOMBIE_DEATH_TIME and corpse_time <= 3.0, "CORPSE_TIME ist länger als die Todesanimation und kurz (%.1f s)." % corpse_time)
+
+	# --- Umfallen nach einem Kugeltreffer ---
+	var zombie: CharacterBody3D = _make_seeded("walker", 5, Vector3(20.0, 0.0, 30.0))
+	_settle(zombie)
+	var body: Node3D = _body_of(zombie)
+	var rig: Node3D = body.get_node("Rig") as Node3D
+	var feet: Vector3 = zombie.global_position
+	zombie.call("take_damage", 1000.0, {"source": "bullet", "headshot": false, "hit_position": feet + Vector3(0.0, 1.0, -0.3)})
+	_check(bool(body.call("is_corpse")), "Mit dem Tod beginnt der Körper seine Todesanimation.")
+	_check(_part_parent_is(body, "head", "Torso"), "Ohne Kopfschuss bleibt der Kopf am Rumpf.")
+	zombie.call("_process", 0.016)
+	_check(zombie.call("get_body") == null and is_instance_valid(body), "Der tote Zombie gibt seinen Körper ab.")
+	var holder: Node = body.get_parent()
+	_check(holder != null and holder.name == "ZombieCorpses" and holder.get_parent() == _world and body.is_in_group("zombie_corpses"),
+			"Der Körper liegt im Behälter ZombieCorpses neben dem Behälter der Zombies.")
+	_check(not body.is_in_group("zombies") and _count_class(body, "CollisionObject3D") == 0 and _count_class(body, "CollisionShape3D") == 0,
+			"Liegende Körper haben keine Kollision und zählen nicht als Zombie.")
+	_check(body.global_position.distance_to(feet) < 0.01, "Der Körper bleibt beim Abgeben an seiner Stelle.")
+	for i: int in 30:
+		body.call("_process", 1.0 / 60.0)
+	_check(rig.rotation.x > 1.2, "Nach einem Kugeltreffer fällt der Körper nach hinten um (%.2f rad)." % rig.rotation.x)
+	var dark: StandardMaterial3D = (body.call("get_part", "torso") as MeshInstance3D).material_override as StandardMaterial3D
+	_check(dark != null and dark.albedo_color.get_luminance() < 0.8, "Der tote Körper wird dunkler.")
+	_check((body.call("get_part", "eyes") as MeshInstance3D).material_override != null, "Die Augen erlöschen.")
+	_step_zombie(zombie, Balance.ZOMBIE_DEATH_TIME + 0.2, 0.05)
+	await process_frame
+	await process_frame
+	_check(not is_instance_valid(zombie), "Der Zombie selbst ist nach ZOMBIE_DEATH_TIME entfernt.")
+	_check(is_instance_valid(body) and not body.is_queued_for_deletion(), "Der Körper bleibt danach noch liegen.")
+	if is_instance_valid(body):
+		body.call("_process", corpse_time)
+	await process_frame
+	await process_frame
+	_check(not is_instance_valid(body), "Nach CORPSE_TIME ist der liegende Körper verschwunden.")
+
+	# --- Kopfschuss: Der Kopf fliegt weg ---
+	var headless: CharacterBody3D = _make_seeded("sprinter", 5, Vector3(20.0, 0.0, 30.0))
+	_settle(headless)
+	var headless_body: Node3D = _body_of(headless)
+	var head: MeshInstance3D = headless_body.call("get_head")
+	var head_start: Vector3 = head.global_position
+	headless.call("take_damage", 1000.0, {"source": "bullet", "headshot": true, "hit_position": head_start + Vector3(0.0, 0.0, -0.2)})
+	_check(head.get_parent() == headless_body, "Beim Kopfschuss löst sich der Kopf vom Rumpf.")
+	_check(head.global_position.distance_to(head_start) < 0.02, "Der Kopf löst sich an seiner Stelle.")
+	headless.call("_process", 0.016)
+	var top: float = head_start.y
+	var away: float = 0.0
+	for i: int in 66:
+		headless_body.call("_process", 1.0 / 60.0)
+		top = maxf(top, head.global_position.y)
+		away = maxf(away, _flat_distance(head.global_position, head_start))
+	_check(top > head_start.y + 0.2 and away > 0.4, "Der Kopf fliegt hoch und weg (%.2f m hoch, %.2f m weit)." % [top - head_start.y, away])
+	_check(head.global_position.y - headless.global_position.y < 0.3 and head.global_position.y - headless.global_position.y > 0.0,
+			"Der Kopf bleibt am Boden liegen (Höhe %.2f m)." % (head.global_position.y - headless.global_position.y))
+	_check((headless_body.get_node("Rig") as Node3D).rotation.x > 1.2, "Der Rumpf fällt trotzdem um.")
+	headless_body.call("_process", corpse_time)
+
+	# --- Explosion: Der Körper zerfällt in Teile ---
+	var burst: CharacterBody3D = _make_seeded("walker", 6, Vector3(24.0, 0.0, 30.0))
+	_settle(burst)
+	var burst_body: Node3D = _body_of(burst)
+	burst.call("take_damage", 1000.0, {"source": "explosion", "hit_position": burst.global_position + Vector3(0.0, 0.5, 2.0)})
+	var loose: int = 0
+	for child: Node in burst_body.get_children():
+		if child is MeshInstance3D:
+			loose += 1
+	_check(loose == 6, "Eine Explosion zerlegt den Körper in sechs Teile (sind %d)." % loose)
+	_check(int(burst_body.call("get_mesh_count")) == 11, "Zerfallen kostet kein zusätzliches Netz (sind %d)." % int(burst_body.call("get_mesh_count")))
+	burst.call("_process", 0.016)
+	var spread: float = 0.0
+	for i: int in 80:
+		burst_body.call("_process", 1.0 / 60.0)
+	var grounded: bool = true
+	for child: Node in burst_body.get_children():
+		var piece: MeshInstance3D = child as MeshInstance3D
+		if piece == null:
+			continue
+		spread = maxf(spread, _flat_distance(piece.global_position, burst_body.global_position))
+		if piece.global_position.y - burst_body.global_position.y > 0.5:
+			grounded = false
+	_check(spread > 0.5, "Die Teile fliegen auseinander (%.2f m)." % spread)
+	_check(grounded, "Die Teile bleiben am Boden liegen.")
+	burst_body.call("_process", corpse_time)
+
+	# --- Brand: Der Körper sackt nach vorn zusammen ---
+	var burned: CharacterBody3D = _make_seeded("elite", 6, Vector3(28.0, 0.0, 30.0))
+	_settle(burned)
+	var burned_body: Node3D = _body_of(burned)
+	burned.call("take_damage", 100000.0, {"source": "burn"})
+	burned.call("_process", 0.016)
+	for i: int in 30:
+		burned_body.call("_process", 1.0 / 60.0)
+	_check((burned_body.get_node("Rig") as Node3D).rotation.x < -1.2, "Nach Brand oder Gift sackt der Körper nach vorn.")
+	burned_body.call("_process", corpse_time)
+	await process_frame
+	await process_frame
+	_check(get_nodes_in_group("zombie_corpses").is_empty(), "Alle liegenden Körper sind verschwunden (übrig: %d)." % get_nodes_in_group("zombie_corpses").size())
+
+	# --- Viele Tote: Ab MAX_CORPSES verschwinden weitere schneller ---
+	var max_corpses: int = int(body_script.get("MAX_CORPSES"))
+	var crowd_time: float = float(body_script.get("CORPSE_TIME_CROWDED"))
+	var bodies: Array[Node3D] = []
+	for i: int in max_corpses + 4:
+		var victim: CharacterBody3D = _make_seeded("walker", 200 + i, Vector3(20.0 + float(i), 0.0, 34.0))
+		bodies.append(_body_of(victim))
+		victim.call("take_damage", 1000.0, {"source": "bullet"})
+		victim.call("_process", 0.016)
+	_check(get_nodes_in_group("zombie_corpses").size() == max_corpses + 4, "Jeder Tote gibt seinen Körper ab.")
+	_check(is_equal_approx(float(bodies[0].get("_life")), corpse_time) and is_equal_approx(float(bodies[max_corpses + 3].get("_life")), crowd_time)
+			and crowd_time < corpse_time, "Liegen schon %d Körper, verschwindet jeder weitere schneller." % max_corpses)
+	# --- Ein neuer Lauf räumt liegende Körper weg ---
+	_game.call("start_run", 12)
+	await process_frame
+	await process_frame
+	_check(get_nodes_in_group("zombie_corpses").is_empty(), "Ein neuer Lauf räumt liegende Körper sofort weg.")
+	_check(_killed.size() == max_corpses + 4 + 4, "Jeder Tod sendet weiter genau ein zombie_killed (sind %d)." % _killed.size())
+	_remove_all_zombies()
+	await process_frame
+	_game.set("player", _player)
+
+
+func _part_parent_is(body: Node3D, part_name: String, parent_name: String) -> bool:
+	var part: Node = body.call("get_part", part_name) as Node
+	return part != null and part.get_parent() != null and String(part.get_parent().name) == parent_name
+
+
+## Fester Seed: Aussehen, Bewegung und Tod ziehen keine Zahl aus Game.rng, zwei Läufe mit
+## demselben Seed setzen ihre Zombies an dieselben Stellen.
+func _test_look_keeps_seed() -> void:
+	_game.call("start_run", 77)
+	_game.set("player", null)
+	var rng: RandomNumberGenerator = _game.get("rng") as RandomNumberGenerator
+	var state: int = rng.state
+	var crowd: Array[CharacterBody3D] = []
+	for i: int in 12:
+		crowd.append(_make_zombie(TYPES[i % 3], 2, Vector3(20.0 + float(i) * 2.0, 0.0, 30.0)))
+	for step: int in 20:
+		for zombie: CharacterBody3D in crowd:
+			zombie.set("_anim_speed", 2.0)
+			zombie.call("_process", 0.03)
+	var sources: Array[String] = ["bullet", "explosion", "burn"]
+	for i: int in crowd.size():
+		crowd[i].call("take_damage", 5.0, {"source": "bullet", "headshot": i % 2 == 0})
+		crowd[i].call("apply_knockback", Vector3(3.0, 0.0, 1.0))
+		crowd[i].call("_process", 0.03)
+		var body: Node3D = _body_of(crowd[i])
+		crowd[i].call("take_damage", 1.0e6, {"source": sources[i % 3], "headshot": i % 2 == 0, "hit_position": crowd[i].global_position + Vector3(0.0, 1.0, -1.0)})
+		crowd[i].call("_process", 0.03)
+		for step: int in 10:
+			body.call("_process", 0.05)
+	_check(rng.state == state, "Aussehen, Bewegung und Tod der Zombies ziehen keine Zahl aus Game.rng.")
+	_remove_all_zombies()
+	# Zwei Läufe mit demselben Seed: dieselben Spawnpunkte in derselben Reihenfolge.
+	_player.position = Vector3.ZERO
+	var runs: Array[Array] = []
+	for run_index: int in 2:
+		_game.call("start_run", 4242)
+		_game.set("player", _player)
+		# Der Spawner merkt sich seinen letzten Punkt: für den Vergleich vergessen lassen.
+		_spawner.set("_last_marker", null)
+		var places: Array[Vector3] = []
+		for i: int in 14:
+			var zombie: Node3D = _spawner.call("spawn", TYPES[i % 3], 3)
+			places.append(zombie.global_position)
+			zombie.call("_process", 0.05)
+			if i % 2 == 0:
+				zombie.call("take_damage", 1.0e6, {"source": "bullet", "headshot": true})
+				zombie.call("_process", 0.05)
+		runs.append(places)
+		_remove_all_zombies()
+	_check(runs[0] == runs[1], "Zwei Läufe mit demselben Seed setzen ihre Zombies an dieselben Stellen.")
+	_game.call("start_run", 11)
+	await process_frame
 	_game.set("player", _player)
 
 
@@ -1120,6 +1710,99 @@ func _test_navigation_and_hop() -> void:
 	_player.position = Vector3.ZERO
 	_player.hits.clear()
 	await process_frame
+
+
+## Sprungproben nur an Wänden der Welt (zombie.gd, _touches_world_wall): Hängt ein Zombie an
+## einem anderen Zombie, meldet er keine Wand der Welt und springt nicht. An einer Wand der Welt
+## meldet er sie, dort wird wie bisher geprobt. Der Sprung auf die Bühne steht in
+## _test_navigation_and_hop.
+func _test_hop_only_at_world_walls() -> void:
+	_game.set("player", _player)
+	_remove_all_zombies()
+	await physics_frame
+	_player.position = Vector3(30.0, 0.0, -30.0)
+	_player.is_dead = false
+	_player.hits.clear()
+	# Ein stehender Zombie versperrt einem zweiten den geraden Weg zum Spieler.
+	var blocker: CharacterBody3D = _make_zombie("elite", 1, Vector3(24.0, 0.0, -30.0))
+	blocker.set_physics_process(false)
+	var pusher: CharacterBody3D = _make_zombie("walker", 1, Vector3(22.0, 0.0, -30.0))
+	var touched: bool = false
+	var world_seen: bool = false
+	var highest: float = 0.0
+	for i: int in 150:
+		await physics_frame
+		if pusher.is_on_wall():
+			touched = true
+			if bool(pusher.call("_touches_world_wall")):
+				world_seen = true
+		highest = maxf(highest, pusher.global_position.y)
+	_check(touched, "Der Zombie läuft auf den anderen auf (für move_and_slide eine Wand).")
+	_check(not world_seen, "Ein anderer Zombie zählt nicht als Wand der Welt: keine Sprungproben im Gedränge.")
+	_check(highest < 0.1, "Am anderen Zombie springt er nicht hoch (höchster Stand %.2f m)." % highest)
+	blocker.call("despawn")
+	pusher.call("despawn")
+	# Eine drei Meter hohe Wand der Welt: zu hoch zum Springen, aber sie wird gemeldet.
+	var wall: StaticBody3D = _add_block(Vector3(26.0, 1.5, -20.0), Vector3(1.0, 3.0, 6.0))
+	for i: int in 2:
+		await physics_frame
+	_player.position = Vector3(30.0, 0.0, -20.0)
+	var walker: CharacterBody3D = _make_zombie("walker", 1, Vector3(24.0, 0.0, -20.0))
+	world_seen = false
+	highest = 0.0
+	for i: int in 150:
+		await physics_frame
+		if walker.is_on_wall() and bool(walker.call("_touches_world_wall")):
+			world_seen = true
+		highest = maxf(highest, walker.global_position.y)
+	_check(world_seen, "An einer Wand der Welt meldet der Zombie die Berührung: Dort wird der Sprung geprobt.")
+	_check(highest < 0.1, "Über eine drei Meter hohe Wand springt er nicht (höchster Stand %.2f m)." % highest)
+	walker.call("despawn")
+	wall.queue_free()
+	_player.position = Vector3.ZERO
+	_player.hits.clear()
+	await process_frame
+
+
+## Der Körper eines nahen Zombies wird einmal je Physikschritt neu gestellt, nicht in jedem Bild
+## (zombie.gd, POSE_WITH_PHYSICS). Läuft keine Physik, spätestens nach POSE_MAX_WAIT. Ausholen
+## läuft weiter in jedem Bild, in der Ferne gilt weiter der Takt nach Zeit. Headless gibt es keine
+## Kamera: Der Test setzt den Stand der Abstufung selbst (gilt für dieses eine Bild).
+func _test_pose_follows_physics() -> void:
+	_game.set("player", null)
+	var constants: Dictionary = _zombie_script.get_script_constant_map()
+	var zombie: CharacterBody3D = _make_zombie("walker", 1, Vector3(-30.0, 0.0, -30.0))
+	_settle(zombie)
+	var body: Node3D = _body_of(zombie)
+	_zombie_script.set("_view_frame", Engine.get_process_frames())
+	_zombie_script.set("_view_valid", true)
+	_zombie_script.set("_view_origin", zombie.global_position + Vector3(0.0, 1.0, 3.0))
+	_zombie_script.set("_view_forward", Vector3(0.0, 0.0, -1.0))
+	_check_near(float(zombie.call("_pose_interval")), float(constants["POSE_WITH_PHYSICS"]), "Drei Meter vor der Kamera: Der Körper folgt dem Takt der Physik.")
+	zombie.set("_stepped", false)
+	zombie.set("_pose_delta", 0.0)
+	var start: float = float(body.get("_time"))
+	zombie.call("_process", 0.012)
+	_check_near(float(body.get("_time")), start, "Ohne Physikschritt bleibt der Körper im nächsten Bild, wie er ist.")
+	zombie.call("_physics_process", 1.0 / 60.0)
+	_check(bool(zombie.get("_stepped")), "Der Physikschritt merkt vor, dass der Körper neu gestellt wird.")
+	zombie.call("_process", 0.004)
+	_check_near(float(body.get("_time")), start + 0.016, "Im Bild nach dem Physikschritt wird der Körper gestellt, mit der ganzen Zeit seit dem letzten Mal.")
+	_check(not bool(zombie.get("_stepped")), "Danach wartet er auf den nächsten Physikschritt.")
+	zombie.call("_process", 0.03)
+	_check_near(float(body.get("_time")), start + 0.016, "Ohne weiteren Physikschritt wartet der Körper.")
+	zombie.call("_process", 0.03)
+	_check_near(float(body.get("_time")), start + 0.076, "Bleibt die Physik aus, wird spätestens nach POSE_MAX_WAIT gestellt.")
+	zombie.set("_windup_left", 0.3)
+	zombie.call("_process", 0.005)
+	_check_near(float(body.get("_time")), start + 0.081, "Beim Ausholen wird der Körper weiter in jedem Bild gestellt.")
+	zombie.set("_windup_left", -1.0)
+	_zombie_script.set("_view_origin", zombie.global_position + Vector3(0.0, 1.0, 20.0))
+	_check_near(float(zombie.call("_pose_interval")), 1.0 / float(constants["ANIM_RATE_MID"]), "20 m vor der Kamera gilt weiter der Takt nach Zeit.")
+	_zombie_script.set("_view_valid", false)
+	_check_near(float(zombie.call("_pose_interval")), 0.0, "Ohne Kamera wird in jedem Bild gestellt (headless-Tests).")
+	zombie.call("despawn")
+	_game.set("player", _player)
 
 
 # --- Hilfen ----------------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 extends CanvasLayer
 ## Modul: Oberfläche (scripts/ui).
 ## Kistenwahl (Abschnitt 11): Überschrift im Showton und 3 Karten nebeneinander in
-## Seltenheits-Farbe mit Name, Stufenzeile und Wirkungstext der neuen Stufe.
+## Seltenheits-Farbe mit dem Bild des Gegenstands (item_icons.gd), Name, Stufenzeile und
+## Wirkungstext der neuen Stufe. Kommen Fundstücke kaputt an (Game.broken_loot, Abschnitt 26.1),
+## nennt die Karte unten den Preis der Reparatur.
 ## Wahl per Taste 1/2/3 (Aktionen weapon_1 bis weapon_3) oder Mausklick auf eine Karte.
 ##
 ## Öffnet sich bei Events.chest_opened(rarity, offers). Das Spiel ist dann pausiert
@@ -27,6 +29,7 @@ const UiStyle := preload("res://scripts/ui/hud.gd")
 const Balance := preload("res://scripts/core/balance.gd")
 const ChestRoller := preload("res://scripts/core/chest_roller.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
+const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
 const LAYER: int = 10
 
@@ -43,12 +46,30 @@ const CONFIRM_MAX_WAIT: float = 0.5
 ## Höchster Zeitschritt für die Sperre: Ein Ruckler beim Öffnen frisst sie nicht auf.
 const MAX_LOCK_STEP: float = 0.05
 const STAGE_SIZE: Vector2 = Vector2(1160.0, 680.0)
-const CARD_SIZE: Vector2 = Vector2(340.0, 420.0)
+const CARD_SIZE: Vector2 = Vector2(340.0, 470.0)
 const CARD_GAP: float = 28.0
 const CARD_TOP: float = 156.0
+## Abstand der Hinweiszeile unter den Karten (dort ruht auch der Mauszeiger).
+const HINT_GAP: float = 24.0
 const MAX_CARDS: int = 3
-## Breite rechts oben in der Karte, die der Aufkleber NEU braucht.
-const NEW_STICKER_SPACE: float = 128.0
+## Bild des Gegenstands: Quadrat oben in der Mitte der Karte.
+const ICON_SIZE: float = 116.0
+const ICON_TOP: float = 60.0
+## Kleine Vorschau der Form im Rucksack links neben dem Bild.
+const SHAPE_PREVIEW_SIZE: float = 56.0
+## Zeilen unter dem Bild: Name, Art und Rarität, Kästchen, Wirkungstext.
+const NAME_TOP: float = 176.0
+const NAME_HEIGHT: float = 66.0
+const LEVEL_TOP: float = 242.0
+const LEVEL_HEIGHT: float = 32.0
+const PIPS_TOP: float = 278.0
+const TEXT_TOP: float = 285.0
+const TEXT_TOP_WITH_PIPS: float = 302.0
+const TEXT_BOTTOM_MARGIN: float = 14.0
+## Hinweis auf kaputte Fundstücke: Streifen am unteren Kartenrand.
+const BROKEN_NOTE_HEIGHT: float = 40.0
+const BROKEN_NOTE_FONT_SIZE: int = 14
+const BROKEN_NOTE_COLOR: Color = Color(1.0, 0.62, 0.2)
 ## Zeilenabstand eines Labels (Standard des Themas): zählt beim Ausmessen des Wirkungstexts mit.
 const LABEL_LINE_SPACING: float = 3.0
 ## Schrift der Zeile mit Art und Rarität: Größe und kleinste Größe, wenn die Zeile lang ist.
@@ -66,7 +87,9 @@ var offers: Array = []
 ## Seltenheit der offenen Kiste.
 var rarity: int = 0
 ## Karten der offenen Wahl in der Reihenfolge der Angebote. Kinder je Karte: "Key" (Taste),
-## "Tag", "Icon", "Name", "Level", "Pips" (nur Upgrades), "Text".
+## "Tag", "Icon" (Bild: ItemIcons.View, bei Trostpreisen UpgradeIcon), "Shape" (kleine Form im
+## Rucksack, nur Gegenstände), "Name", "Level", "Pips" (nur mit Rarität oder Stufe), "Text",
+## "Broken" (Label, nur wenn das Fundstück kaputt ankommt, dahinter "BrokenPlate").
 var cards: Array[Control] = []
 ## Überschrift, z. B. "GOLD-KISTE! JACKPOT!".
 var headline_label: Label
@@ -259,7 +282,7 @@ func _build() -> void:
 	hint_label.name = "Hint"
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.pivot_offset_ratio = Vector2(0.5, 0.5)
-	UiStyle.anchor_box(hint_label, Vector2.ZERO, Vector2(0.0, CARD_TOP + CARD_SIZE.y + 20.0), Vector2(STAGE_SIZE.x, 30.0))
+	UiStyle.anchor_box(hint_label, Vector2.ZERO, Vector2(0.0, CARD_TOP + CARD_SIZE.y + HINT_GAP), Vector2(STAGE_SIZE.x, 30.0))
 	stage.add_child(hint_label)
 
 
@@ -274,8 +297,8 @@ func _clear_cards() -> void:
 
 func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	var kind: String = String(offer.get("kind", ""))
-	# Gegenstand für den Rucksack: Upgrade-Gegenstände sehen aus wie die alten Upgrade-Karten
-	# (von 0 auf die Stufe des Gegenstands), Verstärker und Rucksack-Teile zeigen ihre Form.
+	# Gegenstand für den Rucksack: Upgrade-Gegenstände zählen ihre Kästchen wie die alten
+	# Upgrade-Karten (von 0 auf die Stufe des Gegenstands). Jeder Gegenstand zeigt sein Bild.
 	var is_item: bool = kind == ChestRoller.KIND_ITEM
 	var item_id: String = String(offer.get("id", "")) if is_item else ""
 	var is_plain_item: bool = is_item and not ItemDefs.is_upgrade(item_id)
@@ -345,34 +368,30 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	UiStyle.anchor_box(tag, Vector2.ZERO, Vector2(64.0, 5.0), Vector2(CARD_SIZE.x - 84.0, 52.0))
 	card.add_child(tag)
 
-	if is_item and not UiStyle.has_icon(item_id):
-		# Waffen, Verstärker, Rucksack-Teile und neuere Gegenstände: Die Form ist das Bild der Karte.
-		# Kameras haben ein gezeichnetes Bild wie die ersten Upgrades.
-		var big_shape: UiStyle.ItemShape = UiStyle.ItemShape.new()
-		big_shape.name = "Icon"
-		big_shape.item_id = item_id
-		big_shape.max_cell = 34.0
-		var shape_rect: Rect2 = Rect2((CARD_SIZE.x - 110.0) * 0.5, 66.0, 110.0, 80.0)
-		if ItemDefs.has_rarity(item_id) and owned_level <= 0 and ItemDefs.size(item_id).x >= 3:
-			# Lange Formen (vor allem Waffen) rücken nach links: Rechts sitzt der Aufkleber NEU.
-			shape_rect = Rect2(22.0, 66.0, CARD_SIZE.x - 22.0 - NEW_STICKER_SPACE, 80.0)
-			big_shape.max_cell = 30.0
-		UiStyle.anchor_box(big_shape, Vector2.ZERO, shape_rect.position, shape_rect.size)
-		card.add_child(big_shape)
+	# Bild der Karte: jeder Gegenstand hat sein gezeichnetes Bild, Trostpreise ihr Symbol.
+	var icon_id: String = String(offer.get("id", "")) if (is_upgrade or is_item) else kind
+	var icon_position: Vector2 = Vector2((CARD_SIZE.x - ICON_SIZE) * 0.5, ICON_TOP)
+	if ItemIcons.has(icon_id):
+		var picture: ItemIcons.View = ItemIcons.View.new()
+		picture.name = "Icon"
+		picture.item_id = icon_id
+		UiStyle.anchor_box(picture, Vector2.ZERO, icon_position, Vector2(ICON_SIZE, ICON_SIZE))
+		card.add_child(picture)
 	else:
 		var icon: UiStyle.UpgradeIcon = UiStyle.UpgradeIcon.new()
 		icon.name = "Icon"
-		icon.icon_id = String(offer.get("id", "")) if (is_upgrade or is_item) else kind
-		UiStyle.anchor_box(icon, Vector2.ZERO, Vector2((CARD_SIZE.x - 76.0) * 0.5, 68.0), Vector2(76.0, 76.0))
+		icon.icon_id = icon_id
+		UiStyle.anchor_box(icon, Vector2.ZERO, icon_position + Vector2(12.0, 12.0), Vector2(ICON_SIZE - 24.0, ICON_SIZE - 24.0))
 		card.add_child(icon)
-		if is_item:
-			# Wie viel Platz der Gegenstand im Rucksack braucht (links, rechts sitzt der Aufkleber NEU).
-			var small_shape: UiStyle.ItemShape = UiStyle.ItemShape.new()
-			small_shape.name = "Shape"
-			small_shape.item_id = item_id
-			small_shape.max_cell = 16.0
-			UiStyle.anchor_box(small_shape, Vector2.ZERO, Vector2(22.0, 78.0), Vector2(56.0, 56.0))
-			card.add_child(small_shape)
+	if is_item:
+		# Wie viel Platz der Gegenstand im Rucksack braucht (links, rechts sitzt der Aufkleber NEU).
+		var small_shape: UiStyle.ItemShape = UiStyle.ItemShape.new()
+		small_shape.name = "Shape"
+		small_shape.item_id = item_id
+		small_shape.max_cell = 16.0
+		UiStyle.anchor_box(small_shape, Vector2.ZERO, Vector2(22.0, ICON_TOP + (ICON_SIZE - SHAPE_PREVIEW_SIZE) * 0.5),
+				Vector2(SHAPE_PREVIEW_SIZE, SHAPE_PREVIEW_SIZE))
+		card.add_child(small_shape)
 
 	var title: String = ChestRoller.offer_title(offer)
 	if not is_upgrade and title.contains(": "):
@@ -384,7 +403,7 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UiStyle.anchor_box(name_label, Vector2.ZERO, Vector2(16.0, 148.0), Vector2(name_width, 68.0))
+	UiStyle.anchor_box(name_label, Vector2.ZERO, Vector2(16.0, NAME_TOP), Vector2(name_width, NAME_HEIGHT))
 	card.add_child(name_label)
 
 	var level_text: String = ""
@@ -427,10 +446,10 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	level_label.name = "Level"
 	level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	UiStyle.anchor_box(level_label, Vector2.ZERO, Vector2(16.0, 216.0), Vector2(name_width, 34.0))
+	UiStyle.anchor_box(level_label, Vector2.ZERO, Vector2(16.0, LEVEL_TOP), Vector2(name_width, LEVEL_HEIGHT))
 	card.add_child(level_label)
 
-	var text_top: float = 262.0
+	var text_top: float = TEXT_TOP
 	if is_upgrade or has_rarity:
 		var pips: UiStyle.Pips = UiStyle.Pips.new()
 		pips.name = "Pips"
@@ -442,14 +461,21 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 			# Gegenstand: so viele Kästchen wie die Rarität, in ihrer Farbe.
 			pips.gained_from = -1
 			pips.fill_color = ItemDefs.rarity_color(to_level)
-		UiStyle.anchor_box(pips, Vector2.ZERO, Vector2((CARD_SIZE.x - 180.0) * 0.5, 254.0), Vector2(180.0, 14.0))
+		UiStyle.anchor_box(pips, Vector2.ZERO, Vector2((CARD_SIZE.x - 180.0) * 0.5, PIPS_TOP), Vector2(180.0, 14.0))
 		card.add_child(pips)
-		text_top = 280.0
+		text_top = TEXT_TOP_WITH_PIPS
 		if (owned_level <= 0) if is_item else (from_level <= 0):
 			card.add_child(_make_new_sticker())
 
+	# Kaputte Fundstücke: Der Hinweis steht unten auf der Karte, der Wirkungstext endet darüber.
+	var text_bottom: float = CARD_SIZE.y - TEXT_BOTTOM_MARGIN
+	var note: String = broken_note(item_id, to_level, Game.get("broken_loot") == true) if is_item else ""
+	if not note.is_empty():
+		text_bottom -= BROKEN_NOTE_HEIGHT + 4.0
+		_add_broken_note(card, note, text_bottom + 4.0)
+
 	var description: String = _keep_units_together(ChestRoller.offer_description(offer))
-	var text_size: Vector2 = Vector2(CARD_SIZE.x - 40.0, CARD_SIZE.y - text_top - 14.0)
+	var text_size: Vector2 = Vector2(CARD_SIZE.x - 40.0, text_bottom - text_top)
 	var text_label: Label = UiStyle.make_label(description, _text_font_size(description, text_size), UiStyle.COL_WHITE)
 	text_label.name = "Text"
 	text_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -460,6 +486,36 @@ func _make_card(index: int, offer: Dictionary, color: Color) -> Control:
 	UiStyle.anchor_box(text_label, Vector2.ZERO, Vector2(20.0, text_top), text_size)
 	card.add_child(text_label)
 	return card
+
+
+## Hinweis auf der Karte, wenn das Fundstück kaputt in die Ablage kommt (Abschnitt 26.1):
+## "Kommt kaputt in die Ablage · Reparatur: 2 Material". Leer, wenn Fundstücke heil ankommen
+## (loot_is_broken false), bei Rucksack-Teilen (sie sind nie kaputt) und bei unbekannter ID.
+static func broken_note(item_id: String, level: int, loot_is_broken: bool) -> String:
+	if not loot_is_broken or not ItemDefs.has(item_id) or ItemDefs.is_bag(item_id):
+		return ""
+	var cost: int = Balance.REPAIR_COST[clampi(level, 1, Balance.REPAIR_COST.size()) - 1]
+	return "Kommt kaputt in die Ablage · Reparatur: %d Material" % cost
+
+
+## Setzt den Hinweis auf kaputte Fundstücke als Streifen unten auf die Karte.
+func _add_broken_note(card: Control, note: String, top: float) -> void:
+	var plate: Panel = UiStyle.make_plate(Color(0.0, 0.0, 0.0, 0.45), BROKEN_NOTE_COLOR, 2, 0.0, 6)
+	plate.name = "BrokenPlate"
+	UiStyle.anchor_box(plate, Vector2.ZERO, Vector2(14.0, top), Vector2(CARD_SIZE.x - 28.0, BROKEN_NOTE_HEIGHT))
+	card.add_child(plate)
+	# "Reparatur: 2 Material" bleibt zusammen: Die Zeile bricht nur hinter dem Punkt in der Mitte um.
+	var shown: String = note.replace("Reparatur: ", "Reparatur:" + String.chr(0x00A0)).replace(" Material", String.chr(0x00A0) + "Material")
+	var label: Label = UiStyle.make_label(shown, BROKEN_NOTE_FONT_SIZE, BROKEN_NOTE_COLOR)
+	label.name = "Broken"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_constant_override("outline_size", 3)
+	label.add_theme_constant_override("shadow_outline_size", 3)
+	label.add_theme_constant_override("line_spacing", 0)
+	UiStyle.anchor_box(label, Vector2.ZERO, Vector2(18.0, top), Vector2(CARD_SIZE.x - 36.0, BROKEN_NOTE_HEIGHT))
+	card.add_child(label)
 
 
 ## Ersetzt das Leerzeichen zwischen Zahl und Einheit ("15 m", "3 s", "15 %") durch ein
@@ -479,7 +535,7 @@ func _make_new_sticker() -> Control:
 	sticker.name = "NewSticker"
 	sticker.pivot_offset_ratio = Vector2(0.5, 0.5)
 	sticker.rotation_degrees = 12.0
-	UiStyle.anchor_box(sticker, Vector2.ZERO, Vector2(CARD_SIZE.x - 122.0, 76.0), Vector2.ZERO)
+	UiStyle.anchor_box(sticker, Vector2.ZERO, Vector2((CARD_SIZE.x + ICON_SIZE) * 0.5 - 4.0, ICON_TOP + 30.0), Vector2.ZERO)
 	return sticker
 
 
@@ -515,7 +571,7 @@ func _animate_entrance() -> void:
 	for i: int in cards.size():
 		var card: Control = cards[i]
 		var rest: Vector2 = card.get_meta("rest_position") as Vector2
-		card.position = rest + Vector2(0.0, 520.0)
+		card.position = rest + Vector2(0.0, 570.0)
 		card.rotation_degrees = -14.0 if i % 2 == 0 else 14.0
 		card.modulate.a = 0.0
 		var delay: float = 0.07 * float(i)

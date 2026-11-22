@@ -11,6 +11,7 @@ config_version=5
 [application]
 
 config/name="Zombie-Shooter"
+config/project_settings_override="user://start.cfg"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
@@ -128,3 +129,4 @@ backpack={
 renderer/rendering_method="gl_compatibility"
 gl_compatibility/driver.windows="opengl3_angle"
 renderer/rendering_method.mobile="gl_compatibility"
+lights_and_shadows/directional_shadow/size=2048

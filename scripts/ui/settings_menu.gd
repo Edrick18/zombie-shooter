@@ -1,7 +1,8 @@
 extends Control
 ## Modul: Oberfläche (scripts/ui).
-## Einstellungen (Ansicht im Pausemenü): Lautstärke, Mausempfindlichkeit, Sichtfeld, Fenstermodus,
-## VSync, Bildraten-Grenze, Auflösungs-Skalierung, Kantenglättung, FPS-Anzeige.
+## Einstellungen (Ansicht im Pausemenü): Lautstärke (gesamt, Musik, Geräusche), Mausempfindlichkeit,
+## Sichtfeld, Fenstermodus, VSync, Bildraten-Grenze, Auflösungs-Skalierung, Kantenglättung,
+## Grafik-Unterbau (gilt erst nach einem Neustart, der Knopf sagt das dazu), FPS-Anzeige.
 ##
 ## Jede Zeile ist entweder ein Regler mit Wertanzeige oder ein Knopf, der beim Klick zum nächsten
 ## Wert weiterschaltet. Jede Änderung wirkt sofort (Settings.apply_video, Settings.apply_audio)
@@ -15,19 +16,30 @@ const Settings := preload("res://scripts/game/settings.gd")
 signal closed
 
 # --- Optik-Zahlen (Koordinaten relativ zur Mitte der Bühne oben) ---
-const ROW_START_Y: float = 140.0
-const ROW_STEP: float = 46.0
+## Zwölf Zeilen und die Fußzeile müssen in die Ansicht im Pausemenü passen (690 Punkte hoch):
+## 124 + 12 * 40 + 18 + 60 = 682.
+const ROW_START_Y: float = 124.0
+const ROW_STEP: float = 40.0
+const FOOTER_GAP: float = 18.0
 const CAPTION_WIDTH: float = 330.0
 const CONTROL_WIDTH: float = 250.0
-const CONTROL_HEIGHT: float = 38.0
+const CONTROL_HEIGHT: float = 36.0
 const FOOTER_BUTTON_SIZE: Vector2 = Vector2(250.0, 60.0)
+## Zusatz am Knopf „Grafik-Unterbau“, solange die Wahl noch nicht läuft.
+const RESTART_NOTE: String = " (Neustart)"
 
 ## Zeilen in der Reihenfolge der Anzeige. kind "slider": min, max, step und scale (Anzeige =
 ## Wert * scale) und suffix. kind "cycle": values und names (gleich lang).
 const ROWS: Array[Dictionary] = [
 	{"id": "master_volume", "caption": "LAUTSTÄRKE", "kind": "slider",
 		"min": 0.0, "max": 100.0, "step": 5.0, "scale": 100.0, "suffix": " %",
-		"hint": "Lautstärke aller Geräusche. 0 % ist stumm, 80 % ist der Standard."},
+		"hint": "Lautstärke von allem zusammen. 0 % ist stumm, 80 % ist der Standard."},
+	{"id": "music_volume", "caption": "MUSIK", "kind": "slider",
+		"min": 0.0, "max": 100.0, "step": 5.0, "scale": 100.0, "suffix": " %",
+		"hint": "Lautstärke der Musik. 0 % ist ohne Musik, 70 % ist der Standard."},
+	{"id": "sfx_volume", "caption": "GERÄUSCHE", "kind": "slider",
+		"min": 0.0, "max": 100.0, "step": 5.0, "scale": 100.0, "suffix": " %",
+		"hint": "Lautstärke von Schüssen, Zombies, Publikum und Menü. 100 % ist der Standard."},
 	{"id": "mouse_sensitivity", "caption": "MAUS-EMPFINDLICHKEIT", "kind": "slider",
 		"min": 10.0, "max": 300.0, "step": 5.0, "scale": 100.0, "suffix": " %",
 		"hint": "Wie schnell sich der Blick mit der Maus dreht. 100 % ist der Standard."},
@@ -46,10 +58,16 @@ const ROWS: Array[Dictionary] = [
 		"hint": "Begrenzt die Bilder je Sekunde. Spart Strom und Lüfterlärm."},
 	{"id": "render_scale", "caption": "AUFLÖSUNG 3D", "kind": "slider",
 		"min": 50.0, "max": 100.0, "step": 5.0, "scale": 100.0, "suffix": " %",
-		"hint": "Unter 100 % wird das Spielbild kleiner berechnet und hochskaliert: schneller, aber unschärfer."},
+		# Gemessen (tests/perf_late.gd, skala=0.75): Jeder Wert unter 100 % kostet mit dem Unterbau ANGLE
+		# („Sicher“) etwa 9 ms je Bild zusätzlich, gleich bei welchem Faktor. Der Hinweis verspricht
+		# deshalb kein Tempo.
+		"hint": "Unter 100 % wird das Spielbild kleiner berechnet und hochskaliert: unschärfer. Mit dem Grafik-Unterbau „Sicher“ wird es dadurch langsamer, nicht schneller."},
 	{"id": "msaa", "caption": "KANTENGLÄTTUNG", "kind": "cycle",
 		"values": [0, 1, 2, 3], "names": ["Aus", "2-fach", "4-fach", "8-fach"],
 		"hint": "Glättet Treppenstufen an Kanten. Höhere Stufen kosten Leistung."},
+	{"id": "graphics_driver", "caption": "GRAFIK-UNTERBAU", "kind": "cycle",
+		"values": [0, 1], "names": ["Sicher", "Schnell"],
+		"hint": "Schnell: etwa doppelte Bildrate, dafür lädt das Spiel bei jedem Start 10 bis 15 Sekunden. Sicher: startet sofort. Gilt erst nach einem Neustart des Spiels."},
 	{"id": "show_fps", "caption": "FPS-ANZEIGE", "kind": "cycle",
 		"values": [false, true], "names": ["Aus", "An"],
 		"hint": "Zeigt die Bilder je Sekunde unten in der Mitte."},
@@ -126,7 +144,7 @@ func _build() -> void:
 	add_child(_headline)
 	for i: int in ROWS.size():
 		_build_row(ROWS[i], ROW_START_Y + float(i) * ROW_STEP)
-	var footer_y: float = ROW_START_Y + float(ROWS.size()) * ROW_STEP + 22.0
+	var footer_y: float = ROW_START_Y + float(ROWS.size()) * ROW_STEP + FOOTER_GAP
 	back_button = UiStyle.make_button("ZURÜCK", UiStyle.COL_GREEN, 28)
 	back_button.name = "Back"
 	back_button.pivot_offset_ratio = Vector2(0.5, 0.5)
@@ -228,7 +246,11 @@ func _update_value_label(row: Dictionary) -> void:
 
 func _update_cycler(row: Dictionary) -> void:
 	var names: Array = row["names"]
-	(cyclers[str(row["id"])] as Button).text = str(names[_cycle_index(row)])
+	var text: String = str(names[_cycle_index(row)])
+	# Der Grafik-Unterbau wechselt erst beim nächsten Programmstart: Das steht am Knopf.
+	if str(row["id"]) == "graphics_driver" and Settings.restart_needed():
+		text += RESTART_NOTE
+	(cyclers[str(row["id"])] as Button).text = text
 
 
 ## Stelle des aktuellen Werts in der Werteliste der Zeile (0, wenn er dort fehlt).

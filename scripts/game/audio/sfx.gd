@@ -1,6 +1,7 @@
 extends Node
 ## Modul: Ton (scripts/game/audio).
-## Spielt alle Geräusche des Spiels. main.gd legt den Knoten als Kind "Sfx" an.
+## Spielt alle Geräusche des Spiels. main.gd legt den Knoten als Kind "Sfx" an. Der Knoten legt
+## selbst die Musik an (music.gd, Kind "Music", abfragbar über die Variable music).
 ##
 ## Die Dateien liegen in res://audio (erzeugt von tools/make_sounds.py, siehe audio/LIESMICH.txt).
 ## Der Knoten hört auf Events und spielt dazu passende Geräusche über zwei Vorräte von Spielern:
@@ -9,8 +10,19 @@ extends Node
 ## (Stöhnen, Tod eines Zombies, Explosion, Blitz, Kiste, Kameras, Minen). Sind alle Spieler eines
 ## Vorrats belegt, wird der älteste neu benutzt.
 ##
-## Der Knoten ändert nichts am Spiel und benutzt nie Game.rng: Tonhöhe und Stöhnen würfelt er
-## mit dem allgemeinen Zufall (randf), ein Lauf mit festem Seed bleibt also gleich.
+## Busse (audio_buses.gd): Geräusche mit Ort laufen über den Bus Reverb (Studio-Hall), ebenso
+## Schüsse und alle Geräusche mit "room" in der Tabelle SOUNDS (Schritte, Landen). Alles andere
+## läuft trocken über den Bus Sfx. Reverb mündet in Sfx, der Regler "Geräusche" gilt für beide.
+##
+## Varianten: Hat ein Geräusch "variants" in der Tabelle SOUNDS, gibt es so viele Dateien dazu
+## (name.wav, name_2.wav, name_3.wav ...). Bei jedem Start wird eine zufällig gewählt, nie
+## dieselbe wie beim letzten Mal. Gezählt wird unter dem Namen des Geräuschs.
+##
+## Laute Ereignisse mit "duck" in der Tabelle drängen die Musik für ihre Dauer um so viele dB
+## zurück (music.duck).
+##
+## Der Knoten ändert nichts am Spiel und benutzt nie Game.rng: Tonhöhe, Variante und Stöhnen
+## würfelt er mit dem allgemeinen Zufall (randf, randi), ein Lauf mit festem Seed bleibt also gleich.
 ## process_mode ALWAYS, damit Menü-Geräusche auch bei pausiertem Baum erklingen.
 ## Fehlt eine Datei (oder hat Godot sie noch nicht eingelesen), bleibt nur dieses Geräusch stumm.
 ##
@@ -39,7 +51,9 @@ extends Node
 ##   explosion                    explosion am Ort (auch ohne Treffer)
 ##   mine_placed / mine_triggered mine_placed / mine_triggered am Ort
 ##   player_damaged               shield_hit, wenn ein Schild da ist, und player_hurt, wenn Schaden
-##                                durchkommt
+##                                durchkommt. Kommt auf einen Schlag mindestens HEAVY_HIT_SHARE des
+##                                höchsten Lebens durch, dazu crowd_gasp (das Publikum erschrickt)
+##   player_health_changed        merkt den Anteil des Lebens für den Herzschlag
 ##   player_shield_changed        shield_recharge, sobald das Schild wieder steigt
 ##   player_dashed                dash
 ##   player_revived               player_revived (Fanfare der Zweiten Staffel)
@@ -52,18 +66,35 @@ extends Node
 ##   backpack_opened / backpack_closed   backpack_open / backpack_close
 ##   points_changed               mehr Punkte bei offenem Rucksack: item_sold,
 ##                                weniger Punkte im laufenden Spiel (Tür): purchase
-##   wave_started / wave_cleared  wave_start / wave_cleared
+##   item_repaired / item_scrapped       item_repaired (Ratsche) / item_scrapped (Blech zerknüllt)
+##   materials_changed            material_gain (Klimpern), wenn Material dazukommt (delta > 0)
+##                                Diese drei Signale werden nur verbunden, wenn Events sie hat
+##   wave_started                 wave_start
+##   wave_cleared                 wave_cleared und crowd_cheer (Applaus und Jubel)
 ##   intermission_tick            countdown_tick in den letzten COUNTDOWN_FROM Sekunden
-##   game_over                    game_over
+##   game_over                    game_over und crowd_aww (das Publikum ist enttäuscht)
 ##   Knöpfe (BaseButton)          ui_hover (Maus darüber), ui_click (gedrückt); Regler: ui_hover
-##   Zombies in der Nähe          zombie_groan_1 bis 3, alle GROAN_GAP_MIN bis GROAN_GAP_MAX s eines
+##   Zombies in der Nähe          zombie_groan_1 bis 3, alle GROAN_GAP_MIN bis GROAN_GAP_MAX s eines,
+##                                nie zweimal dasselbe hintereinander
+##   Spieler läuft am Boden       step: alle STEP_STRIDE Meter ein Schritt (über Game.player:
+##                                velocity und is_on_floor), also beim Sprinten schneller und dann
+##                                etwas lauter. Nicht in der Luft, nicht im Ausweichsprung, nicht
+##                                unter STEP_MIN_SPEED
+##   Spieler landet               land, wenn er mit mindestens LAND_MIN_FALL_SPEED aufkommt, je
+##                                schneller desto lauter
+##   Leben unter HEARTBEAT_SHARE  heartbeat, je weniger Leben desto schneller und lauter
+##   laufende Sendung             crowd_murmur als leise Schleife (in jedem State außer MENU)
 
 const Settings := preload("res://scripts/game/settings.gd")
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
+const AudioBuses := preload("res://scripts/game/audio/audio_buses.gd")
+const AudioLoader := preload("res://scripts/game/audio/audio_loader.gd")
+const Music := preload("res://scripts/game/audio/music.gd")
 
 const AUDIO_DIR: String = "res://audio/"
-const BUS_NAME: String = "Sfx"
-const MASTER_BUS: String = "Master"
+const BUS_NAME: String = AudioBuses.SFX
+const ROOM_BUS: String = AudioBuses.REVERB
+const MASTER_BUS: String = AudioBuses.MASTER
 ## Zahl der Spieler ohne Ort und mit Ort.
 const POOL_SIZE: int = 16
 const POOL_SIZE_3D: int = 12
@@ -118,29 +149,67 @@ const STREAM_GAP: float = 0.12
 ## und um so viele dB leiser.
 const STREAM_HIT_GAP_MSEC: int = 250
 const STREAM_HIT_DB: float = -5.0
+## Schritte: Weg in Metern zwischen zwei Schritten. Passt zum Wippen der Kamera in player.gd (ein
+## Auf und Ab je PI / BOB_FREQUENCY = 1,8 m): Gehen (5 m/s) ergibt 2,8 Schritte je Sekunde,
+## Sprinten (7 m/s) 3,9. Unter STEP_MIN_SPEED (m/s) gibt es keine Schritte. Über STEP_SPRINT_SPEED
+## sind sie um STEP_SPRINT_DB lauter. Nach dem Stehen kommt der erste Schritt nach
+## STEP_FIRST_SHARE des Wegs.
+const STEP_STRIDE: float = 1.8
+const STEP_MIN_SPEED: float = 1.5
+const STEP_SPRINT_SPEED: float = 6.0
+const STEP_SPRINT_DB: float = 2.0
+const STEP_FIRST_SHARE: float = 0.6
+## Landen: ab dieser Fallgeschwindigkeit (m/s) ist es zu hören (ein Sprung auf ebenem Boden landet
+## mit 4,5 m/s), bei LAND_FULL_FALL_SPEED mit voller Lautstärke, an der Schwelle um LAND_SOFT_DB leiser.
+const LAND_MIN_FALL_SPEED: float = 2.0
+const LAND_FULL_FALL_SPEED: float = 7.0
+const LAND_SOFT_DB: float = -10.0
+## Herzschlag: unter diesem Anteil des höchsten Lebens. Abstand zweier Schläge in Sekunden an der
+## Schwelle (SLOW) und kurz vor dem Tod (FAST), an der Schwelle um HEARTBEAT_SOFT_DB leiser.
+const HEARTBEAT_SHARE: float = 0.3
+const HEARTBEAT_SLOW: float = 0.95
+const HEARTBEAT_FAST: float = 0.55
+const HEARTBEAT_SOFT_DB: float = -6.0
+## Schwerer Treffer: Kommt auf einen Schlag mindestens dieser Anteil des höchsten Lebens durch,
+## erschrickt das Publikum (ein Elite-Zombie trifft mit 35 von 100).
+const HEAVY_HIT_SHARE: float = 0.3
+## Leben des Spielers, solange noch kein player_health_changed kam.
+const DEFAULT_MAX_HP: float = 100.0
+## Raunen des Publikums: Datei, Lautstärke in dB und Dauer des Ein- und Ausblendens in Sekunden.
+## Die Datei hat im Mittel -17,7 dBFS: Mit -20 dB liegt das Raunen bei etwa -38 dBFS, gut 10 dB
+## unter der ruhigen Musik. Es soll den Raum füllen, ohne dass man hinhört.
+const AMBIENCE_FILE: String = "crowd_murmur"
+const AMBIENCE_DB: float = -20.0
+const AMBIENCE_FADE_TIME: float = 1.5
+## Größter Zeitschritt für das Blenden in Sekunden.
+const MAX_STEP: float = 0.1
 
 ## Alle Geräusche: Name = Dateiname ohne Endung.
 ## db: Grundlautstärke in dB. pitch: Streuung der Tonhöhe (0.05 = 5 % nach oben und unten).
 ## gap: Mindestabstand in Sekunden zwischen zwei Starts desselben Geräuschs (0 = jeder Start zählt).
+## variants (wenn vorhanden): Zahl der Dateien (name, name_2, name_3 ...), sonst 1.
+## room (wenn vorhanden und true): läuft auch ohne Ort über den Hall-Bus. Schüsse (shot_...) tun
+##   das immer.
+## duck (wenn vorhanden): drängt die Musik für die Dauer des Geräuschs um so viele dB zurück.
 const SOUNDS: Dictionary = {
-	"shot_pistol": {"db": -5.0, "pitch": 0.05, "gap": 0.0},
+	"shot_pistol": {"db": -5.0, "pitch": 0.05, "gap": 0.0, "variants": 3},
 	"shot_revolver": {"db": -3.0, "pitch": 0.04, "gap": 0.0},
-	"shot_smg": {"db": -7.0, "pitch": 0.06, "gap": 0.0},
+	"shot_smg": {"db": -7.0, "pitch": 0.06, "gap": 0.0, "variants": 3},
 	"shot_sawed_off": {"db": -2.0, "pitch": 0.05, "gap": 0.0},
 	"shot_shotgun": {"db": -2.0, "pitch": 0.04, "gap": 0.0},
-	"shot_rifle": {"db": -5.0, "pitch": 0.05, "gap": 0.0},
+	"shot_rifle": {"db": -5.0, "pitch": 0.05, "gap": 0.0, "variants": 3},
 	"shot_sniper": {"db": -1.0, "pitch": 0.03, "gap": 0.0},
-	"shot_minigun": {"db": -9.0, "pitch": 0.07, "gap": 0.0},
+	"shot_minigun": {"db": -9.0, "pitch": 0.07, "gap": 0.0, "variants": 3},
 	"shot_rocket_launcher": {"db": -6.0, "pitch": 0.04, "gap": 0.0},
 	"reload_start": {"db": -8.0, "pitch": 0.04, "gap": 0.05},
 	"reload_done": {"db": -7.0, "pitch": 0.04, "gap": 0.05},
-	"hit": {"db": -12.0, "pitch": 0.08, "gap": 0.05},
+	"hit": {"db": -12.0, "pitch": 0.08, "gap": 0.05, "variants": 3},
 	"headshot": {"db": -7.0, "pitch": 0.04, "gap": 0.08},
-	"zombie_death": {"db": -4.0, "pitch": 0.12, "gap": 0.04},
+	"zombie_death": {"db": -4.0, "pitch": 0.12, "gap": 0.04, "variants": 3},
 	"zombie_groan_1": {"db": -6.0, "pitch": 0.12, "gap": 0.0},
 	"zombie_groan_2": {"db": -6.0, "pitch": 0.12, "gap": 0.0},
 	"zombie_groan_3": {"db": -6.0, "pitch": 0.12, "gap": 0.0},
-	"elite_roar": {"db": -1.0, "pitch": 0.05, "gap": 0.5},
+	"elite_roar": {"db": -1.0, "pitch": 0.05, "gap": 0.5, "duck": -5.0},
 	"player_hurt": {"db": -4.0, "pitch": 0.06, "gap": 0.1},
 	"shield_hit": {"db": -6.0, "pitch": 0.05, "gap": 0.08},
 	"shield_recharge": {"db": -14.0, "pitch": 0.0, "gap": 0.5},
@@ -149,25 +218,25 @@ const SOUNDS: Dictionary = {
 	"chest_open": {"db": -6.0, "pitch": 0.0, "gap": 0.1},
 	"card_chosen": {"db": -8.0, "pitch": 0.03, "gap": 0.05},
 	"upgrade": {"db": -7.0, "pitch": 0.0, "gap": 0.25},
-	"synergy": {"db": -5.0, "pitch": 0.0, "gap": 0.5},
+	"synergy": {"db": -5.0, "pitch": 0.0, "gap": 0.5, "duck": -4.0},
 	"backpack_open": {"db": -8.0, "pitch": 0.03, "gap": 0.1},
 	"backpack_close": {"db": -8.0, "pitch": 0.03, "gap": 0.1},
 	"item_sold": {"db": -8.0, "pitch": 0.03, "gap": 0.06},
 	"purchase": {"db": -6.0, "pitch": 0.02, "gap": 0.06},
-	"wave_start": {"db": -5.0, "pitch": 0.0, "gap": 0.5},
-	"wave_cleared": {"db": -6.0, "pitch": 0.0, "gap": 0.5},
+	"wave_start": {"db": -5.0, "pitch": 0.0, "gap": 0.5, "duck": -6.0},
+	"wave_cleared": {"db": -6.0, "pitch": 0.0, "gap": 0.5, "duck": -6.0},
 	"countdown_tick": {"db": -14.0, "pitch": 0.0, "gap": 0.2},
-	"game_over": {"db": -4.0, "pitch": 0.0, "gap": 1.0},
+	"game_over": {"db": -4.0, "pitch": 0.0, "gap": 1.0, "duck": -8.0},
 	"ui_hover": {"db": -20.0, "pitch": 0.03, "gap": 0.04},
 	"ui_click": {"db": -13.0, "pitch": 0.03, "gap": 0.03},
-	"explosion": {"db": -1.0, "pitch": 0.1, "gap": 0.07},
+	"explosion": {"db": -1.0, "pitch": 0.1, "gap": 0.07, "variants": 3, "duck": -5.0},
 	"lightning": {"db": -7.0, "pitch": 0.12, "gap": 0.06},
 	# Der Abstand hält viele Drohnen im Zaum: höchstens zwölf Schüsse je Sekunde sind zu hören.
 	"drone_shot": {"db": -10.0, "pitch": 0.08, "gap": 0.08},
 	# --- Ausbau 3: Schüsse der neuen Waffen ---
-	"shot_burst_pistol": {"db": -6.0, "pitch": 0.05, "gap": 0.0},
-	"shot_nail_gun": {"db": -8.0, "pitch": 0.06, "gap": 0.0},
-	"shot_machine_pistol": {"db": -9.0, "pitch": 0.07, "gap": 0.0},
+	"shot_burst_pistol": {"db": -6.0, "pitch": 0.05, "gap": 0.0, "variants": 3},
+	"shot_nail_gun": {"db": -8.0, "pitch": 0.06, "gap": 0.0, "variants": 3},
+	"shot_machine_pistol": {"db": -9.0, "pitch": 0.07, "gap": 0.0, "variants": 3},
 	"shot_crossbow": {"db": -5.0, "pitch": 0.04, "gap": 0.0},
 	"shot_grenade_launcher": {"db": -4.0, "pitch": 0.05, "gap": 0.0},
 	# Dauerfeuer als überlappende Stücke (siehe STREAM_GAP). Drei Stücke zusammen sind etwa 4 dB
@@ -177,8 +246,8 @@ const SOUNDS: Dictionary = {
 	"shot_flamethrower": {"db": -13.0, "pitch": 0.1, "gap": STREAM_GAP},
 	"shot_beam": {"db": -15.0, "pitch": 0.0, "gap": STREAM_GAP},
 	"shot_tesla": {"db": -5.0, "pitch": 0.08, "gap": 0.0},
-	"shot_lmg": {"db": -8.0, "pitch": 0.06, "gap": 0.0},
-	"shot_auto_shotgun": {"db": -4.0, "pitch": 0.05, "gap": 0.0},
+	"shot_lmg": {"db": -8.0, "pitch": 0.06, "gap": 0.0, "variants": 3},
+	"shot_auto_shotgun": {"db": -4.0, "pitch": 0.05, "gap": 0.0, "variants": 3},
 	# --- Ausbau 3: Kameras (leise, mit Abstand: Zehn Kameras sollen nicht nerven) ---
 	"cam_tele": {"db": -8.0, "pitch": 0.05, "gap": 0.12},
 	"cam_flash": {"db": -9.0, "pitch": 0.06, "gap": 0.15},
@@ -187,22 +256,42 @@ const SOUNDS: Dictionary = {
 	# --- Ausbau 3: Gegenstände und Fortschritt ---
 	"mine_placed": {"db": -12.0, "pitch": 0.05, "gap": 0.1},
 	"mine_triggered": {"db": -12.0, "pitch": 0.0, "gap": 0.1},
-	"player_revived": {"db": -4.0, "pitch": 0.0, "gap": 1.0},
-	"pack_unlocked": {"db": -6.0, "pitch": 0.0, "gap": 0.5},
+	"player_revived": {"db": -4.0, "pitch": 0.0, "gap": 1.0, "duck": -7.0},
+	"pack_unlocked": {"db": -6.0, "pitch": 0.0, "gap": 0.5, "duck": -6.0},
 	"bank_coins": {"db": -7.0, "pitch": 0.0, "gap": 1.0},
 	"ricochet": {"db": -14.0, "pitch": 0.1, "gap": 0.08},
 	"thorns": {"db": -9.0, "pitch": 0.08, "gap": 0.1},
+	# --- Ausbau 4: Spieler (leise: Schritte sollen den Raum füllen, nicht stören). Ohne
+	# Mindestabstand: Den Takt geben Weg (STEP_STRIDE) und Leben (HEARTBEAT_...) vor. ---
+	"step": {"db": -15.0, "pitch": 0.06, "gap": 0.0, "variants": 4, "room": true},
+	"land": {"db": -8.0, "pitch": 0.05, "gap": 0.0, "room": true},
+	"heartbeat": {"db": -7.0, "pitch": 0.0, "gap": 0.0},
+	# --- Ausbau 4: Publikum ---
+	"crowd_cheer": {"db": -9.0, "pitch": 0.04, "gap": 1.0},
+	"crowd_gasp": {"db": -8.0, "pitch": 0.05, "gap": 2.5},
+	"crowd_aww": {"db": -7.0, "pitch": 0.03, "gap": 2.0},
+	# --- Ausbau 4: Material ---
+	"item_repaired": {"db": -9.0, "pitch": 0.03, "gap": 0.08},
+	"item_scrapped": {"db": -8.0, "pitch": 0.06, "gap": 0.08},
+	"material_gain": {"db": -15.0, "pitch": 0.06, "gap": 0.12},
 }
 
 ## false: Geräusche werden nur gezählt (get_play_count), kein Spieler startet. Headless (Tests)
 ## ist das der Standard: Dort endet das Programm oft mitten in einem Geräusch, und Godot meldet
 ## dann verlorene Objekte ("ObjectDB instances leaked", "resources still in use"), womit ein Test
 ## als fehlgeschlagen gilt. Wer die Spieler headless prüfen will (tests/test_audio.gd), setzt true
-## und wartet vor dem Ende, bis alles verklungen ist.
+## und wartet vor dem Ende, bis alles verklungen ist. Der Wert gilt auch für die Musik: Er wird ihr
+## beim Start übergeben.
 var playback_enabled: bool = DisplayServer.get_name() != "headless"
+## Die Musik (Kind "Music"), angelegt in _ready.
+var music: Music
 
-## Geladene Geräusche (Name -> AudioStream). Was fehlt, steht hier nicht.
+## Geladene Geräusche (Name -> AudioStream, die erste Variante). Was fehlt, steht hier nicht.
 var _streams: Dictionary = {}
+## Alle geladenen Varianten je Geräusch (Name -> Array von AudioStream, mindestens eine).
+var _variants: Dictionary = {}
+## Stelle der zuletzt gespielten Variante je Geräusch (Name -> int).
+var _last_variant: Dictionary = {}
 ## Wie oft ein Geräusch gestartet wurde (Name -> int).
 var _play_counts: Dictionary = {}
 ## Zeitpunkt des letzten Starts in Millisekunden (Name -> int).
@@ -220,6 +309,7 @@ var _busy_until: int = 0
 ## Das Fenster wird gerade geschlossen.
 var _closing: bool = false
 var _groan_left: float = GROAN_GAP_MIN
+var _last_groan: String = ""
 ## Letzter bekannter Punktestand, -1 = noch keiner in diesem Lauf.
 var _points: int = -1
 var _shield: float = 0.0
@@ -227,18 +317,36 @@ var _shield_rising: bool = false
 var _last_state: int = -1
 ## Zeitpunkt (Millisekunden) des letzten Treffer-Geräuschs von Flammenwerfer oder Strahl.
 var _stream_hit_at: int = -STREAM_HIT_GAP_MSEC
+## Schritte: Weg seit dem letzten Schritt in Metern, Boden im letzten Bild, letzte Fallgeschwindigkeit.
+var _step_distance: float = STEP_STRIDE * STEP_FIRST_SHARE
+var _was_on_floor: bool = true
+var _fall_speed: float = 0.0
+## Leben des Spielers: Anteil (0 bis 1) und Höchstwert, aus player_health_changed.
+var _hp_share: float = 1.0
+var _max_hp: float = DEFAULT_MAX_HP
+## Sekunden bis zum nächsten Herzschlag.
+var _heart_left: float = 0.0
+## Raunen des Publikums: eigener Spieler und Stand der Blende (0 = aus, 1 = voll).
+var _ambience_player: AudioStreamPlayer
+var _ambience_gain: float = 0.0
+var _last_msec: int = 0
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	# Die gespeicherte Lautstärke gilt ab dem Start.
+	# Die gespeicherten Lautstärken gelten ab dem Start. apply_audio legt auch die Busse an.
 	Settings.ensure_loaded()
 	Settings.apply_audio()
-	_ensure_bus()
 	_build_pools()
 	_load_sounds()
+	_build_ambience()
+	music = Music.new()
+	music.name = "Music"
+	music.playback_enabled = playback_enabled
+	add_child(music)
 	_groan_left = randf_range(GROAN_GAP_MIN, GROAN_GAP_MAX)
 	_last_state = int(Game.state)
+	_last_msec = Time.get_ticks_msec()
 	_connect_events()
 	get_tree().node_added.connect(_wire_ui)
 	_wire_existing(get_tree().root)
@@ -252,14 +360,13 @@ func _ready() -> void:
 ## Laufs: Game.restart_run setzt den State auf MENU, bevor es die Szene neu lädt, und das
 ## Programm läuft danach weiter, Godot räumt also selbst auf. Wird das Fenster geschlossen,
 ## gilt das auch im State MENU (Kandidatenwahl) als Programmende.
+## Musik und Raunen laufen fast immer: Auch sie gelten als laufendes Geräusch.
 func _exit_tree() -> void:
-	if Time.get_ticks_msec() >= _busy_until or (Game.state == Game.State.MENU and not _closing):
+	var loops_running: bool = _loops_playing()
+	if (Time.get_ticks_msec() >= _busy_until and not loops_running) or (Game.state == Game.State.MENU and not _closing):
 		return
 	_busy_until = 0
-	for player: AudioStreamPlayer in _players:
-		player.stop()
-	for player_3d: AudioStreamPlayer3D in _players_3d:
-		player_3d.stop()
+	stop_all()
 	OS.delay_msec(EXIT_GRACE_MSEC)
 
 
@@ -277,6 +384,13 @@ func _process(delta: float) -> void:
 		_last_state = state
 	if state == Game.State.PLAYING and not get_tree().paused:
 		_tick_groans(delta)
+		_tick_movement(delta)
+		_tick_heartbeat(delta)
+	# Das Raunen blendet in echter Zeit, auch bei pausiertem Baum und in der Zeitlupe.
+	var now: int = Time.get_ticks_msec()
+	var real_delta: float = float(now - _last_msec) / 1000.0
+	_last_msec = now
+	_tick_ambience(minf(real_delta, MAX_STEP))
 
 
 # --- Öffentliche Schnittstelle ----------------------------------------------------------------
@@ -299,12 +413,14 @@ func has_sound(sound_id: String) -> bool:
 	return _streams.has(sound_id)
 
 
-## Wie oft das Geräusch gestartet wurde, seit es diesen Knoten gibt (ausgelassene Starts zählen nicht).
+## Wie oft das Geräusch gestartet wurde, seit es diesen Knoten gibt (ausgelassene Starts zählen
+## nicht). Alle Varianten zählen unter dem Namen des Geräuschs.
 func get_play_count(sound_id: String) -> int:
 	return int(_play_counts.get(sound_id, 0))
 
 
-## Namen aller Geräusche, die das Spiel kennt (auch die, deren Datei fehlt), sortiert.
+## Namen aller Geräusche, die das Spiel kennt (auch die, deren Datei fehlt), sortiert. Varianten
+## haben keinen eigenen Namen.
 func sound_ids() -> Array[String]:
 	var ids: Array[String] = []
 	for id: String in SOUNDS:
@@ -313,17 +429,40 @@ func sound_ids() -> Array[String]:
 	return ids
 
 
+## Zahl der geladenen Varianten eines Geräuschs (0, wenn es nicht geladen ist).
+func get_variant_count(sound_id: String) -> int:
+	return (_variants[sound_id] as Array).size() if _variants.has(sound_id) else 0
+
+
+## Stelle der zuletzt gespielten Variante (0 = name.wav, 1 = name_2.wav ...), -1 vor dem ersten Start.
+func get_last_variant(sound_id: String) -> int:
+	return int(_last_variant.get(sound_id, -1))
+
+
+## Soll das Raunen des Publikums gerade zu hören sein? In jedem State außer MENU.
+func is_ambience_wanted() -> bool:
+	return int(Game.state) != Game.State.MENU
+
+
+## Stand der Blende des Raunens: 0 = aus, 1 = voll.
+func get_ambience_gain() -> float:
+	return _ambience_gain
+
+
+## Hält alle Spieler sofort an, auch Musik und Raunen (Programmende, Tests). Solange
+## playback_enabled gilt, starten Musik und Raunen im nächsten Bild wieder.
+func stop_all() -> void:
+	for player: AudioStreamPlayer in _players:
+		player.stop()
+	for player_3d: AudioStreamPlayer3D in _players_3d:
+		player_3d.stop()
+	if _ambience_player != null:
+		_ambience_player.stop()
+	if is_instance_valid(music):
+		music.stop_all()
+
+
 # --- Aufbau -------------------------------------------------------------------------------------
-
-## Legt den Bus "Sfx" an, wenn es ihn noch nicht gibt. Er geht in den Master-Bus.
-func _ensure_bus() -> void:
-	if AudioServer.get_bus_index(BUS_NAME) != -1:
-		return
-	AudioServer.add_bus()
-	var index: int = AudioServer.bus_count - 1
-	AudioServer.set_bus_name(index, BUS_NAME)
-	AudioServer.set_bus_send(index, MASTER_BUS)
-
 
 func _build_pools() -> void:
 	for i: int in POOL_SIZE:
@@ -336,7 +475,7 @@ func _build_pools() -> void:
 	for i: int in POOL_SIZE_3D:
 		var player_3d: AudioStreamPlayer3D = AudioStreamPlayer3D.new()
 		player_3d.name = "Player3D%d" % i
-		player_3d.bus = BUS_NAME
+		player_3d.bus = ROOM_BUS
 		player_3d.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 		player_3d.unit_size = UNIT_SIZE_3D
 		player_3d.max_distance = MAX_DISTANCE_3D
@@ -347,39 +486,43 @@ func _build_pools() -> void:
 
 func _load_sounds() -> void:
 	for id: String in SOUNDS:
-		var stream: AudioStream = _load_stream(AUDIO_DIR + id + ".wav")
-		if stream != null:
-			_streams[id] = stream
+		var total: int = int((SOUNDS[id] as Dictionary).get("variants", 1))
+		var loaded: Array[AudioStream] = []
+		for index: int in total:
+			var stream: AudioStream = _load_stream(AUDIO_DIR + variant_file(id, index) + ".wav")
+			if stream != null:
+				loaded.append(stream)
+		if not loaded.is_empty():
+			_variants[id] = loaded
+			_streams[id] = loaded[0]
 
 
-## Lädt eine Tondatei, ohne je eine Fehlermeldung auszulösen.
-## 1. Hat Godot die Datei eingelesen (im fertigen Spiel gibt es nur das), wird sie normal geladen.
-## 2. Sonst wird die rohe WAV-Datei direkt gelesen (frisch kopiertes Projekt ohne Import).
-## 3. Fehlt beides, kommt null zurück.
+## Dateiname (ohne Endung) der Variante mit dieser Stelle: Die erste heißt wie das Geräusch, die
+## weiteren name_2, name_3 ...
+static func variant_file(sound_id: String, index: int) -> String:
+	return sound_id if index <= 0 else "%s_%d" % [sound_id, index + 1]
+
+
+## Der Spieler für das Raunen des Publikums (eine Schleife, kein Geräusch aus der Tabelle).
+func _build_ambience() -> void:
+	_ambience_player = AudioStreamPlayer.new()
+	_ambience_player.name = "Ambience"
+	_ambience_player.bus = BUS_NAME
+	_ambience_player.volume_db = -80.0
+	add_child(_ambience_player)
+	var stream: AudioStream = _load_stream(AUDIO_DIR + AMBIENCE_FILE + ".wav")
+	if stream != null:
+		AudioLoader.ensure_loop(stream)
+		_ambience_player.stream = stream
+
+
+## Lädt eine Tondatei, ohne je eine Fehlermeldung auszulösen (siehe audio_loader.gd).
 func _load_stream(path: String) -> AudioStream:
-	if _is_imported(path) and ResourceLoader.exists(path):
-		var imported: AudioStream = load(path) as AudioStream
-		if imported != null:
-			return imported
-	if FileAccess.file_exists(path):
-		return AudioStreamWAV.load_from_file(path)
-	# Letzter Versuch: ein Paket, in dem die Import-Notiz nicht lesbar ist, die Datei aber bekannt.
-	if not FileAccess.file_exists(path + ".import") and ResourceLoader.exists(path):
-		return load(path) as AudioStream
-	return null
+	return AudioLoader.load_stream(path)
 
 
-## Gibt es die Import-Notiz der Datei und die Datei, auf die sie zeigt? Nur dann lädt load()
-## ohne Fehlermeldung.
 func _is_imported(path: String) -> bool:
-	var note_path: String = path + ".import"
-	if not FileAccess.file_exists(note_path):
-		return false
-	var note: ConfigFile = ConfigFile.new()
-	if note.load(note_path) != OK:
-		return false
-	var target: String = str(note.get_value("remap", "path", ""))
-	return target != "" and FileAccess.file_exists(target)
+	return AudioLoader.is_imported(path)
 
 
 func _connect_events() -> void:
@@ -393,6 +536,7 @@ func _connect_events() -> void:
 	Events.zombie_killed.connect(_on_zombie_killed)
 	Events.zombie_spawned.connect(_on_zombie_spawned)
 	Events.player_damaged.connect(_on_player_damaged)
+	Events.player_health_changed.connect(_on_player_health_changed)
 	Events.player_shield_changed.connect(_on_player_shield_changed)
 	Events.player_dashed.connect(_on_player_dashed)
 	Events.camera_fired.connect(_on_camera_fired)
@@ -412,6 +556,13 @@ func _connect_events() -> void:
 	Events.wave_cleared.connect(_on_wave_cleared)
 	Events.intermission_tick.connect(_on_intermission_tick)
 	Events.game_over.connect(_on_game_over)
+	# Material (Abschnitt 26): nur verbinden, wenn Events die Signale schon hat.
+	if Events.has_signal("item_repaired"):
+		Events.connect("item_repaired", _on_item_repaired)
+	if Events.has_signal("item_scrapped"):
+		Events.connect("item_scrapped", _on_item_scrapped)
+	if Events.has_signal("materials_changed"):
+		Events.connect("materials_changed", _on_materials_changed)
 
 
 # --- Abspielen ----------------------------------------------------------------------------------
@@ -427,6 +578,7 @@ func _start(sound_id: String, volume_db: float, pitch_factor: float) -> void:
 	_serial += 1
 	_order[index] = _serial
 	player.stream = stream
+	player.bus = ROOM_BUS if _uses_room(sound_id) else BUS_NAME
 	player.volume_db = _base_db(sound_id) + volume_db
 	player.pitch_scale = _pitch(sound_id) * pitch_factor
 	player.play()
@@ -452,17 +604,40 @@ func _start_at(sound_id: String, position: Vector3, volume_db: float, pitch_fact
 
 
 ## Prüft, ob das Geräusch jetzt starten darf (geladen, Knoten im Baum, Mindestabstand vorbei),
-## zählt den Start und gibt die Tondatei zurück. null = nicht spielen.
+## zählt den Start, wählt die Variante, drängt bei lauten Ereignissen die Musik zurück und gibt
+## die Tondatei zurück. null = nicht spielen.
 func _claim(sound_id: String) -> AudioStream:
-	if not _streams.has(sound_id) or not is_inside_tree() or _players.is_empty():
+	if not _variants.has(sound_id) or not is_inside_tree() or _players.is_empty():
 		return null
+	var entry: Dictionary = SOUNDS[sound_id]
 	var now: int = Time.get_ticks_msec()
-	var gap_msec: int = roundi(float((SOUNDS[sound_id] as Dictionary)["gap"]) * 1000.0)
+	var gap_msec: int = roundi(float(entry["gap"]) * 1000.0)
 	if gap_msec > 0 and _last_start.has(sound_id) and now - int(_last_start[sound_id]) < gap_msec:
 		return null
 	_last_start[sound_id] = now
 	_play_counts[sound_id] = int(_play_counts.get(sound_id, 0)) + 1
-	return _streams[sound_id] as AudioStream
+	var stream: AudioStream = _pick_variant(sound_id)
+	if entry.has("duck") and is_instance_valid(music):
+		music.duck(float(entry["duck"]), stream.get_length())
+	return stream
+
+
+## Wählt eine Variante des Geräuschs: zufällig, aber nie dieselbe wie beim letzten Mal.
+func _pick_variant(sound_id: String) -> AudioStream:
+	var loaded: Array = _variants[sound_id]
+	var total: int = loaded.size()
+	var pick: int = 0
+	if total > 1:
+		var last: int = int(_last_variant.get(sound_id, -1))
+		# Nach der letzten Variante eine bis total - 1 Stellen weiter: jede andere gleich wahrscheinlich.
+		pick = randi() % total if last < 0 else (last + 1 + randi() % (total - 1)) % total
+	_last_variant[sound_id] = pick
+	return loaded[pick] as AudioStream
+
+
+## Läuft das Geräusch auch ohne Ort über den Hall-Bus? Schüsse immer, sonst nach der Tabelle.
+func _uses_room(sound_id: String) -> bool:
+	return sound_id.begins_with(SHOT_PREFIX) or bool((SOUNDS[sound_id] as Dictionary).get("room", false))
 
 
 ## Merkt, bis wann das gerade gestartete Geräusch läuft (mit etwas Luft).
@@ -516,6 +691,13 @@ func _play_near(sound_id: String, zombie: Node3D, info: Dictionary, volume_db: f
 		_start(sound_id, volume_db, pitch_factor)
 
 
+## Laufen gerade Musik oder Raunen?
+func _loops_playing() -> bool:
+	if _ambience_player != null and _ambience_player.playing:
+		return true
+	return is_instance_valid(music) and music.is_playing()
+
+
 # --- Stöhnen ------------------------------------------------------------------------------------
 
 ## Lässt in zufälligen Abständen einen Zombie in der Nähe des Spielers stöhnen.
@@ -539,7 +721,89 @@ func _tick_groans(delta: float) -> void:
 	if near.is_empty():
 		return
 	_groan_left = randf_range(GROAN_GAP_MIN, GROAN_GAP_MAX)
-	play_at(GROAN_IDS[randi() % GROAN_IDS.size()], near[randi() % near.size()])
+	play_at(_next_groan(), near[randi() % near.size()])
+
+
+## Eines der Stöhn-Geräusche, nie dasselbe wie beim letzten Mal.
+func _next_groan() -> String:
+	var choices: Array[String] = []
+	for id: String in GROAN_IDS:
+		if id != _last_groan and has_sound(id):
+			choices.append(id)
+	if choices.is_empty():
+		return GROAN_IDS[0]
+	_last_groan = choices[randi() % choices.size()]
+	return _last_groan
+
+
+# --- Schritte, Landen, Herzschlag, Raunen -------------------------------------------------------
+
+## Schritte und Landen des Spielers. Liest nur Game.player (velocity, is_on_floor, is_dashing,
+## is_dead), ändert dort nichts.
+func _tick_movement(delta: float) -> void:
+	var player: Node3D = Game.player if is_instance_valid(Game.player) else null
+	if player == null or not player.is_inside_tree() or not player.has_method("is_on_floor"):
+		_was_on_floor = true
+		_fall_speed = 0.0
+		return
+	var velocity_value: Variant = player.get("velocity")
+	if typeof(velocity_value) != TYPE_VECTOR3 or player.get("is_dead") == true:
+		return
+	var velocity: Vector3 = velocity_value
+	var on_floor: bool = bool(player.call("is_on_floor"))
+	if not on_floor:
+		# In der Luft: Die letzte Fallgeschwindigkeit entscheidet beim Aufkommen über das Landen.
+		_fall_speed = maxf(0.0, -velocity.y)
+		_was_on_floor = false
+		return
+	if not _was_on_floor:
+		_was_on_floor = true
+		if _fall_speed >= LAND_MIN_FALL_SPEED:
+			var force: float = clampf(inverse_lerp(LAND_MIN_FALL_SPEED, LAND_FULL_FALL_SPEED, _fall_speed), 0.0, 1.0)
+			play("land", lerpf(LAND_SOFT_DB, 0.0, force))
+			# Das Landen ist selbst ein Schritt: Der nächste kommt erst nach einem ganzen Weg.
+			_step_distance = 0.0
+		_fall_speed = 0.0
+	var speed: float = Vector2(velocity.x, velocity.z).length()
+	var dashing: bool = player.has_method("is_dashing") and bool(player.call("is_dashing"))
+	if dashing:
+		return
+	if speed < STEP_MIN_SPEED:
+		# Stehen: Der erste Schritt nach dem Loslaufen kommt bald.
+		_step_distance = maxf(_step_distance, STEP_STRIDE * STEP_FIRST_SHARE)
+		return
+	_step_distance += speed * delta
+	if _step_distance >= STEP_STRIDE:
+		_step_distance = fmod(_step_distance, STEP_STRIDE)
+		play("step", STEP_SPRINT_DB if speed >= STEP_SPRINT_SPEED else 0.0)
+
+
+## Herzschlag bei wenig Leben: je weniger, desto schneller und lauter.
+func _tick_heartbeat(delta: float) -> void:
+	if _hp_share <= 0.0 or _hp_share >= HEARTBEAT_SHARE:
+		_heart_left = 0.0
+		return
+	_heart_left -= delta
+	if _heart_left > 0.0:
+		return
+	# 0 an der Schwelle, 1 kurz vor dem Tod.
+	var urgency: float = 1.0 - _hp_share / HEARTBEAT_SHARE
+	_heart_left = lerpf(HEARTBEAT_SLOW, HEARTBEAT_FAST, urgency)
+	play("heartbeat", lerpf(HEARTBEAT_SOFT_DB, 0.0, urgency))
+
+
+## Blendet das Raunen des Publikums ein und aus.
+func _tick_ambience(delta: float) -> void:
+	_ambience_gain = move_toward(_ambience_gain, 1.0 if is_ambience_wanted() else 0.0, delta / AMBIENCE_FADE_TIME)
+	if not playback_enabled or _ambience_player == null or _ambience_player.stream == null:
+		return
+	if _ambience_gain <= 0.0:
+		if _ambience_player.playing:
+			_ambience_player.stop()
+		return
+	_ambience_player.volume_db = AMBIENCE_DB + linear_to_db(_ambience_gain)
+	if not _ambience_player.playing:
+		_ambience_player.play()
 
 
 # --- Oberfläche ---------------------------------------------------------------------------------
@@ -588,6 +852,11 @@ func _on_run_started() -> void:
 	_shield = 0.0
 	_shield_rising = false
 	_groan_left = randf_range(GROAN_GAP_MIN, GROAN_GAP_MAX)
+	_step_distance = STEP_STRIDE * STEP_FIRST_SHARE
+	_was_on_floor = true
+	_fall_speed = 0.0
+	_hp_share = 1.0
+	_heart_left = 0.0
 
 
 func _on_weapon_fired(weapon_id: String) -> void:
@@ -669,12 +938,20 @@ func _on_zombie_spawned(zombie: Node3D) -> void:
 
 
 ## Der Spieler fängt Schaden zuerst mit dem Schild ab (player.gd): Nur was darüber hinausgeht,
-## tut weh.
+## tut weh. Ein schwerer Treffer lässt das Publikum erschrecken.
 func _on_player_damaged(amount: float) -> void:
 	if _shield > 0.0:
 		play("shield_hit")
 	if amount > _shield:
 		play("player_hurt")
+		if amount - _shield >= HEAVY_HIT_SHARE * _max_hp:
+			play("crowd_gasp")
+
+
+func _on_player_health_changed(hp: float, max_hp: float) -> void:
+	if max_hp > 0.0:
+		_max_hp = max_hp
+		_hp_share = clampf(hp / max_hp, 0.0, 1.0)
 
 
 func _on_player_shield_changed(shield: float, _max_shield: float) -> void:
@@ -741,12 +1018,28 @@ func _on_points_changed(total: int) -> void:
 		play("purchase")
 
 
+func _on_item_repaired(_uid: int) -> void:
+	play("item_repaired")
+
+
+func _on_item_scrapped(_uid: int, _amount: int) -> void:
+	play("item_scrapped")
+
+
+## Nur dazugekommenes Material klimpert (Wellen-Prämie, Verschrotten). Ausgaben (Reparieren) und
+## der Stand am Laufbeginn (delta 0) sind stumm.
+func _on_materials_changed(_total: int, delta: int) -> void:
+	if delta > 0:
+		play("material_gain")
+
+
 func _on_wave_started(_wave: int, _total_zombies: int) -> void:
 	play("wave_start")
 
 
 func _on_wave_cleared(_wave: int) -> void:
 	play("wave_cleared")
+	play("crowd_cheer")
 
 
 func _on_intermission_tick(seconds_left: int) -> void:
@@ -756,3 +1049,4 @@ func _on_intermission_tick(seconds_left: int) -> void:
 
 func _on_game_over(_stats: Dictionary) -> void:
 	play("game_over")
+	play("crowd_aww")

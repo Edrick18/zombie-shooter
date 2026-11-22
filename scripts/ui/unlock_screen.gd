@@ -4,10 +4,10 @@ extends CanvasLayer
 ## Was in einem gekauften Paket steckt, kann danach in Kisten liegen.
 ##
 ## Aufbau bei 1280x720: oben Überschrift und Kontostand. Links ein Raster mit den elf Paketen
-## als Karten (Name, Inhalt, Preis, Zustand), im zwölften Fach der Fortschritt (x von 11 Paketen,
-## beste Welle, Läufe) und der Knopf „Zurück“. Rechts die Tafel zum markierten Paket: je Teil
-## Bild, Name, Art (Waffe, Kamera, Gegenstand ...) und der Wirkungstext aus ItemDefs, darunter
-## der große Kaufknopf.
+## als Karten (Name, Inhalt mit kleinen Bildern, Preis, Zustand), im zwölften Fach der Fortschritt
+## (x von 11 Paketen, beste Welle, Läufe) und der Knopf „Zurück“. Rechts die Tafel zum markierten
+## Paket: je Teil Bild (item_icons.gd), Name, Art (Waffe, Kamera, Gegenstand ...) und der
+## Wirkungstext aus ItemDefs, darunter der große Kaufknopf.
 ##
 ## Der Bildschirm führt keinen eigenen Spielzustand ein: Er liegt deckend über der Kandidatenwahl
 ## (Game.State.MENU) oder über dem Game Over. Wer ihn öffnet, bleibt darunter offen und ist nach
@@ -31,6 +31,7 @@ const UiStyle := preload("res://scripts/ui/hud.gd")
 const ItemDefs := preload("res://scripts/core/item_defs.gd")
 const UnlockDefs := preload("res://scripts/core/unlock_defs.gd")
 const CameraDefs := preload("res://scripts/core/camera_defs.gd")
+const ItemIcons := preload("res://scripts/ui/item_icons.gd")
 
 ## Über allen anderen Bildschirmen (Game Over 30, Kandidatenwahl 40).
 const LAYER: int = 45
@@ -49,8 +50,14 @@ const GRID_ORIGIN: Vector2 = Vector2(0.0, 104.0)
 const GRID_COLUMNS: int = 4
 const CARD_SIZE: Vector2 = Vector2(194.0, 190.0)
 const CARD_GAP: Vector2 = Vector2(12.0, 11.0)
-const CARD_ITEM_TOP: float = 42.0
-const CARD_ITEM_STEP: float = 20.0
+const CARD_ITEM_TOP: float = 40.0
+const CARD_ITEM_STEP: float = 21.0
+## Kleines Bild vor jedem Teil auf der Karte (auf einem Feld in der Farbe seiner Art) und die
+## Stelle, an der danach der Name beginnt.
+const CARD_ITEM_ICON: float = 20.0
+const CARD_ITEM_TEXT_LEFT: float = 35.0
+## Felder hinter den Bildern: Die Farbe der Art, so weit abgedunkelt.
+const ICON_FIELD_DARKEN: float = 0.5
 const DETAIL_RECT: Rect2 = Rect2(828.0, 104.0, 404.0, 592.0)
 const DETAIL_PADDING: float = 16.0
 const DETAIL_ICON: float = 48.0
@@ -70,7 +77,7 @@ const FOOTNOTE_TEXT: String = "Die Zahlen gelten für die Rarität Gewöhnlich."
 const COL_LOCKED: Color = Color(0.5, 0.42, 0.7)
 
 ## Karten in der Reihenfolge von UnlockDefs.PACK_ORDER. Meta "id" = Paket. Kinder je Karte:
-## "Back", "Name", "Items" (je Teil "Dot_<n>" und "Item_<n>"), "Price", "State" (Label:
+## "Back", "Name", "Items" (je Teil "Icon_<n>": kleines Bild, und "Item_<n>": Name), "Price", "State" (Label:
 ## "GEKAUFT" oder "Es fehlen 1.500"), "Buy" (Knopf, nur sichtbar, wenn das Konto reicht).
 var cards: Array[Control] = []
 ## Überschrift des Bildschirms.
@@ -444,7 +451,7 @@ func _make_card(pack_id: String) -> Control:
 	UiStyle.anchor_box(rule, Vector2.ZERO, Vector2(14.0, 36.0), Vector2(CARD_SIZE.x - 28.0, 2.0))
 	card.add_child(rule)
 
-	# Inhalt: je Teil ein Farbfeld (Art) und der Name.
+	# Inhalt: je Teil sein kleines Bild und der Name.
 	var items: Control = Control.new()
 	items.name = "Items"
 	items.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -453,20 +460,20 @@ func _make_card(pack_id: String) -> Control:
 	var item_ids: Array[String] = UnlockDefs.pack_items(pack_id)
 	for n: int in item_ids.size():
 		var item_id: String = item_ids[n]
-		var dot: ColorRect = ColorRect.new()
-		dot.name = "Dot_%d" % n
-		dot.color = ItemDefs.color(item_id)
-		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		UiStyle.anchor_box(dot, Vector2.ZERO, Vector2(14.0, float(n) * CARD_ITEM_STEP + 5.0), Vector2(10.0, 10.0))
-		items.add_child(dot)
+		var small_icon: ItemIcons.View = ItemIcons.View.new()
+		small_icon.name = "Icon_%d" % n
+		small_icon.item_id = item_id
+		_style_icon_field(small_icon, item_id)
+		UiStyle.anchor_box(small_icon, Vector2.ZERO, Vector2(10.0, float(n) * CARD_ITEM_STEP), Vector2(CARD_ITEM_ICON, CARD_ITEM_ICON))
+		items.add_child(small_icon)
 		var item_name: String = ItemDefs.display_name(item_id)
-		var item_width: float = CARD_SIZE.x - 42.0
+		var item_width: float = CARD_SIZE.x - CARD_ITEM_TEXT_LEFT - 8.0
 		var item_label: Label = UiStyle.make_label(item_name, UiStyle.fit_font_size(item_name, 14, item_width - 4.0, false, 10), UiStyle.COL_WHITE)
 		item_label.name = "Item_%d" % n
 		item_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		item_label.clip_text = true
 		_thin_outline(item_label)
-		UiStyle.anchor_box(item_label, Vector2.ZERO, Vector2(31.0, float(n) * CARD_ITEM_STEP), Vector2(item_width, CARD_ITEM_STEP))
+		UiStyle.anchor_box(item_label, Vector2.ZERO, Vector2(CARD_ITEM_TEXT_LEFT, float(n) * CARD_ITEM_STEP), Vector2(item_width, CARD_ITEM_STEP))
 		items.add_child(item_label)
 
 	var price_label: Label = UiStyle.make_label("%s Punkte" % UiStyle.format_int(UnlockDefs.pack_price(pack_id)), 16, UiStyle.COL_WHITE, true)
@@ -777,21 +784,24 @@ func _text_height(font: Font, text: String, width: float, font_size: int) -> flo
 	return ceilf(lines * line_height + (lines - 1.0) * float(DETAIL_LINE_SPACING))
 
 
-## Bild eines Teils: das gezeichnete Symbol, wenn es eines gibt, sonst seine Form im Rucksack.
+## Bild eines Teils in der Tafel: sein gezeichnetes Bild auf einem Feld in der Farbe seiner Art.
 func _make_item_icon(item_id: String) -> Control:
-	var icon_size: Vector2 = Vector2(DETAIL_ICON, DETAIL_ICON)
-	if UiStyle.has_icon(item_id):
-		var icon: UiStyle.UpgradeIcon = UiStyle.UpgradeIcon.new()
-		icon.name = "Icon"
-		icon.icon_id = item_id
-		UiStyle.anchor_box(icon, Vector2.ZERO, Vector2(0.0, 3.0), icon_size)
-		return icon
-	var shape: UiStyle.ItemShape = UiStyle.ItemShape.new()
-	shape.name = "Icon"
-	shape.item_id = item_id
-	shape.max_cell = 20.0
-	UiStyle.anchor_box(shape, Vector2.ZERO, Vector2(0.0, 3.0), icon_size)
-	return shape
+	var icon: ItemIcons.View = ItemIcons.View.new()
+	icon.name = "Icon"
+	icon.item_id = item_id
+	_style_icon_field(icon, item_id)
+	UiStyle.anchor_box(icon, Vector2.ZERO, Vector2(0.0, 3.0), Vector2(DETAIL_ICON, DETAIL_ICON))
+	return icon
+
+
+## Legt hinter ein Bild das Feld in der Farbe seiner Art (Waffe stahlblau, Kamera violett,
+## Gegenstände nach Gruppe): Rand in der Farbe, Fläche abgedunkelt. So bleibt die Art auf einen
+## Blick erkennbar, und auch dunkle Bilder heben sich vom Grund ab.
+func _style_icon_field(icon: ItemIcons.View, item_id: String) -> void:
+	var kind_color: Color = ItemDefs.color(item_id)
+	icon.plate = true
+	icon.plate_color = kind_color
+	icon.plate_fill = kind_color.darkened(ICON_FIELD_DARKEN)
 
 
 ## Markierung um dx Spalten und dy Zeilen weiter. Zur Seite geht es am Ende der Liste vorn

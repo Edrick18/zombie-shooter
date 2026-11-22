@@ -80,6 +80,14 @@ extends Node
 ## Treffer-Info: Jeder Treffer trägt neben den Schlüsseln aus Abschnitt 18 "mode" (Schussart),
 ## "opener" (bool) und "scored" (bool, gab der Treffer Treffer-Punkte). Ein Blitzsprung trägt
 ## "arc": true, die Explosion der Schlusspointe "punchline": true.
+##
+## Bilder der Treffer (reine Optik, alles über fx.gd, Zufall nie aus Game.rng):
+## - Einschlag in der Welt: Fx.impact (Funken, Staub, Einschussmal) an der getroffenen Fläche.
+## - Treffer am Zombie: Fx.splatter in Flugrichtung der Kugel, stärker bei Kopftreffer und
+##   kritischem Treffer. Schrot, Flamme und Strahl dünnen aus (SPLAT_STRENGTH_*).
+## - Trefferzahl: Fx.hint_number direkt vor Events.bullet_hit sagt fx.gd, dass die nächste Zahl
+##   mit diesem Betrag ein Kopftreffer oder kritischer Treffer ist.
+## - Tod eines Zombies (Events.zombie_killed, egal wodurch): Fx.kill_burst an seiner Körpermitte.
 
 const Balance := preload("res://scripts/core/balance.gd")
 const WeaponDefs := preload("res://scripts/core/weapon_defs.gd")
@@ -120,8 +128,14 @@ const PUNCHLINE_COLOR: Color = Color(1.0, 0.25, 0.75)
 const ARC_NUMBER_COLOR: Color = Color(0.45, 0.9, 1.0)
 ## Trefferzahlen der Blitzsprünge erscheinen so weit über der Körpermitte.
 const ARC_NUMBER_HEIGHT: float = 0.6
-const IMPACT_SIZE: float = 0.09
-const IMPACT_TIME: float = 0.14
+## Stärke von Einschlag und Spritzern (1 = voll): Schrot hat viele Kugeln je Schuss, Flamme und
+## Strahl treffen 15 bis 20 Mal je Sekunde jeden Zombie in ihrer Bahn.
+const FX_STRENGTH_PELLETS: float = 0.45
+const FX_STRENGTH_STREAM: float = 0.17
+## Die Leuchtspur beginnt erst so weit vor der Mündung (höchstens dieser Anteil ihrer Länge):
+## knapp hinter dem Mündungsfeuer.
+const TRACER_LEAD: float = 0.2
+const TRACER_LEAD_SHARE: float = 0.1
 ## Strahl und Flamme bleiben nach dem letzten Stoß noch so viele Schussfolgen lang sichtbar: Bei
 ## Dauerfeuer reißt das Bild so nie ab, nach dem Loslassen ist es sofort weg.
 const STREAM_LINGER_SHOTS: float = 1.5
@@ -200,6 +214,8 @@ class Shot:
 	var crit_chance: float = 0.0
 	## Zusatz auf Kopftreffer vom Teleprompter.
 	var headshot_bonus: float = 0.0
+	## Stärke der Bilder am Einschlag (reine Optik, siehe FX_STRENGTH_*).
+	var fx_strength: float = 1.0
 
 
 ## Die Hände in Reihenfolge (Index 0 = linke Hand).
@@ -210,8 +226,6 @@ var _player: Node3D = null
 var _fire_blocked_until_release: bool = false
 var _last_process_frame: int = -1
 var _was_inactive: bool = true
-var _impact_mesh: BoxMesh = null
-var _impact_materials: Dictionary = {}
 
 
 func _ready() -> void:
@@ -219,6 +233,7 @@ func _ready() -> void:
 	_last_process_frame = Engine.get_process_frames()
 	Events.run_started.connect(_on_run_started)
 	Events.build_changed.connect(_on_build_changed)
+	Events.zombie_killed.connect(_on_zombie_killed)
 	_sync_loadout(true)
 
 
@@ -503,7 +518,8 @@ func _spread_of(hand: Hand) -> float:
 ## uid einer gewöhnlichen Waffe mit dieser ID in der Ablage, -1 wenn dort keine liegt.
 func _stored_common_weapon(backpack: BackpackState, weapon_id: String) -> int:
 	for entry: Dictionary in backpack.storage_items():
-		if String(entry["id"]) == weapon_id and int(entry["level"]) == 1:
+		# Eine kaputte Waffe lässt sich nicht einräumen (Abschnitt 26): nicht wiederverwenden.
+		if String(entry["id"]) == weapon_id and int(entry["level"]) == 1 and not bool(entry.get("broken", false)):
 			return int(entry["uid"])
 	return -1
 
@@ -644,6 +660,10 @@ func _release_shot(hand: Hand, index: int, first_of_magazine: bool) -> void:
 	shot.arc_jumps = WeaponDefs.arc_jumps(hand.id)
 	shot.arc_factor = WeaponDefs.arc_factor(hand.id)
 	shot.arc_radius = WeaponDefs.arc_radius(hand.id)
+	if not shot.score_each:
+		shot.fx_strength = FX_STRENGTH_STREAM
+	elif int(shot.def["pellets"]) > 1:
+		shot.fx_strength = FX_STRENGTH_PELLETS
 	if first_of_magazine and Game.bullet_level(hand.uid, "opener") > 0:
 		shot.opener = true
 		shot.multiplier *= 1.0 + maxf(Game.bullet_value(hand.uid, "opener", "bonus"), 0.0)
@@ -795,7 +815,7 @@ func _fire_pellet(shot: Shot, extra: bool, extra_factor: float) -> void:
 			if explosive:
 				_explode(shot, hit_position - direction * EXPLOSION_BACKOFF, 0, bonus_factor, extra, crit)
 			elif not is_beam:
-				_spawn_impact(fx_root, hit_position, color)
+				Fx.impact(fx_root, hit_position, hit["normal"], color, shot.fx_strength)
 			_try_punchline(shot, hit_position - direction * EXPLOSION_BACKOFF)
 			break
 		exclude.append(hit["rid"])
@@ -806,6 +826,8 @@ func _fire_pellet(shot: Shot, extra: bool, extra_factor: float) -> void:
 			shot.headshot_bonus) * shot.multiplier * bonus_factor
 		_deal_hit(shot, zombie, damage, _hit_info(shot, hit_position, headshot, extra, crit))
 		targets_hit += 1
+		if not explosive:
+			Fx.splatter(fx_root, hit_position, direction, headshot, crit, shot.fx_strength)
 		if explosive:
 			end = hit_position
 			_explode(shot, hit_position - direction * EXPLOSION_BACKOFF, zombie_id, bonus_factor, extra, crit)
@@ -818,7 +840,8 @@ func _fire_pellet(shot: Shot, extra: bool, extra_factor: float) -> void:
 	if is_beam and not extra:
 		# Der Dauerstrahl hat sein eigenes Bild (_show_stream), keine Leuchtspur.
 		return
-	Fx.tracer(fx_root, shot.muzzle, end, color)
+	var trail: Vector3 = end - shot.muzzle
+	Fx.tracer(fx_root, shot.muzzle + trail.normalized() * minf(TRACER_LEAD, trail.length() * TRACER_LEAD_SHARE), end, color)
 	if shot.arc_jumps > 0:
 		# Der Schuss des Kurzschlusses ist selbst ein Blitz (ab ARC_SHOT_LEAD vor der Mündung).
 		var path: Vector3 = end - shot.muzzle
@@ -867,7 +890,10 @@ func _deal_hit(shot: Shot, zombie: Node3D, damage: float, info: Dictionary) -> v
 	var origin: Vector3 = _center_of(zombie) if shot.arc_jumps > 0 else Vector3.ZERO
 	zombie.call("take_damage", damage, damage_info)
 	if is_instance_valid(zombie):
+		# Nur fürs Bild: Die Trefferzahl dieses Treffers zeigt Kopftreffer und kritischen Treffer.
+		Fx.hint_number(damage, bool(info["headshot"]), bool(info["crit"]))
 		Events.bullet_hit.emit(zombie, damage, info)
+		Fx.clear_number_hint()
 	if shot.arc_jumps > 0:
 		_cast_arc(shot, zombie, origin, damage, bool(info["extra"]), bool(info["crit"]))
 
@@ -943,6 +969,7 @@ func _fire_flame(shot: Shot, extra: bool, extra_factor: float) -> void:
 		var zombie: Node3D = entry["zombie"]
 		var hit_position: Vector3 = entry["point"]
 		_deal_hit(shot, zombie, damage, _hit_info(shot, hit_position, false, extra, crit))
+		Fx.splatter(shot.fx_root, hit_position, shot.aim, false, crit, shot.fx_strength)
 		if burn_dps > 0.0 and burn_time > 0.0 and _is_alive(zombie) and zombie.has_method("apply_burn"):
 			zombie.call("apply_burn", burn_dps, burn_time)
 		if first_hit:
@@ -1032,6 +1059,7 @@ func _on_grenade_hit(hit: Dictionary, at: Vector3, direction: Vector3, shot: Sho
 			var damage: float = WeaponDefs.bullet_damage(shot.hand.id, headshot, 0, shot.headshot_bonus) \
 				* shot.multiplier * bonus_factor
 			_deal_hit(shot, zombie, damage, _hit_info(shot, at, headshot, extra, crit))
+			Fx.splatter(shot.fx_root, at, direction, headshot, crit, shot.fx_strength)
 	_explode(shot, center, direct_id, bonus_factor, extra, crit)
 	_try_punchline(shot, center)
 	return true
@@ -1260,26 +1288,9 @@ func _apply_spread(direction: Vector3, spread_deg: float) -> Vector3:
 	return (direction + side * (cos(angle) * radius) + up * (sin(angle) * radius)).normalized()
 
 
-## Kleiner Einschlag-Funke an Wand oder Boden, räumt sich selbst weg.
-func _spawn_impact(fx_root: Node, at: Vector3, color: Color) -> void:
-	if not is_instance_valid(fx_root) or not fx_root.is_inside_tree():
+## Reine Optik: Ein Zombie, der stirbt (egal wodurch), platzt an seiner Körpermitte. Große
+## Zombies platzen größer.
+func _on_zombie_killed(zombie: Node3D, _info: Dictionary) -> void:
+	if not is_instance_valid(zombie) or not zombie.is_inside_tree():
 		return
-	if _impact_mesh == null:
-		_impact_mesh = BoxMesh.new()
-		_impact_mesh.size = Vector3.ONE * IMPACT_SIZE
-	var material: StandardMaterial3D = _impact_materials.get(color, null) as StandardMaterial3D
-	if material == null:
-		material = StandardMaterial3D.new()
-		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		material.albedo_color = color.lerp(Color.WHITE, 0.5)
-		_impact_materials[color] = material
-	var spark: MeshInstance3D = MeshInstance3D.new()
-	spark.mesh = _impact_mesh
-	spark.material_override = material
-	spark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	spark.rotation = Vector3(at.x * 7.0, at.y * 5.0, at.z * 3.0)
-	fx_root.add_child(spark)
-	spark.global_position = at
-	var tween: Tween = spark.create_tween()
-	tween.tween_property(spark, "scale", Vector3.ONE * 0.05, IMPACT_TIME).from(Vector3.ONE * 1.6)
-	tween.tween_callback(spark.queue_free)
+	Fx.kill_burst(Fx.root_of(self), _center_of(zombie), _body_height(zombie) / Balance.ZOMBIE_HEIGHT)

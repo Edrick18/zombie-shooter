@@ -104,6 +104,19 @@ signal bank_changed(bank: int, gained: int)
 ## Ein Paket wurde gekauft: Sein Inhalt kann ab jetzt in Kisten liegen.
 @warning_ignore("unused_signal")
 signal pack_unlocked(pack_id: String)
+# --- Abschnitt 26 ---
+## Das Material des Laufs hat sich geändert. total: neuer Stand, delta: Änderung (positiv bei
+## Wellen-Prämie und Verschrotten, negativ beim Reparieren, 0 beim Start eines Laufs).
+@warning_ignore("unused_signal")
+signal materials_changed(total: int, delta: int)
+## Ein kaputter Gegenstand wurde repariert (Game.repair_item). Kommt nach materials_changed.
+## build_changed kommt dabei nicht: Der Gegenstand liegt weiter in der Ablage.
+@warning_ignore("unused_signal")
+signal item_repaired(uid: int)
+## Ein Gegenstand wurde verschrottet (Game.scrap_item) und ist schon aus dem Rucksack entfernt.
+## amount: das Material, das es dafür gab. Kommt nach build_changed und materials_changed.
+@warning_ignore("unused_signal")
+signal item_scrapped(uid: int, amount: int)
 ## "" = keine Anzeige.
 @warning_ignore("unused_signal")
 signal interact_prompt_changed(text: String)

@@ -59,6 +59,8 @@ func _run() -> void:
 	# Dieses Werkzeug darf den echten Spielstand (Konto, Pakete) nie anfassen.
 	_game.set("progress_file_enabled", false)
 	(_game.get("progress") as RefCounted).set("unlock_all", true)
+	# Fundstücke kommen hier heil an: Die Messung räumt selbst ein und repariert nichts.
+	_game.set("broken_loot", false)
 	_events = root.get_node("Events")
 	_main = (load(MAIN_SCENE) as PackedScene).instantiate()
 	if _main == null or _main.get_script() == null or not _main.has_method("_build_world"):

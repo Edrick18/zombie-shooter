@@ -9,9 +9,13 @@ extends Node3D
 ## Aufbau:
 ##   FlameFx
 ##   ├─ Particles  CPUParticles3D, fliegt im Kegel von der Mündung bis zum Ende der Flamme
+##   ├─ Core       CPUParticles3D, heller, schmaler Kern in der Mitte der Flamme (kürzer)
+##   ├─ Smoke      CPUParticles3D, dünne Rauchfahne, die am Ende der Flamme aufsteigt
 ##   └─ Light      warmes Punktlicht in der Flamme
 ##
 ## Einbinden mit: const FlameFx := preload("res://scripts/game/player/flame_fx.gd")
+
+const FxPool := preload("res://scripts/game/fx/fx_pool.gd")
 
 const PARTICLE_AMOUNT: int = 44
 ## Flugzeit eines Flammenballs von der Mündung bis zum Ende der Flamme.
@@ -36,19 +40,45 @@ const LIGHT_AT: float = 0.45
 ## sollen zu sehen bleiben.
 const RAMP_OFFSETS: Array[float] = [0.0, 0.18, 0.5, 1.0]
 const RAMP_COLORS: Array[Color] = [
-	Color(1.0, 0.9, 0.5, 0.55), Color(1.0, 0.66, 0.14, 0.3),
-	Color(1.0, 0.3, 0.05, 0.14), Color(0.5, 0.06, 0.0, 0.0),
+	Color(1.0, 0.9, 0.5, 0.4), Color(1.0, 0.66, 0.14, 0.22),
+	Color(1.0, 0.3, 0.05, 0.11), Color(0.5, 0.06, 0.0, 0.0),
+]
+## Kern: wenige kleine, fast weiße Bälle in einem schmalen Kegel, die nur den vorderen Teil der
+## Flamme erreichen. So hat die Flamme eine heiße Mitte, ohne dass ihr Ende heller wird.
+const CORE_AMOUNT: int = 14
+const CORE_LIFETIME: float = 0.26
+const CORE_REACH: float = 0.6
+const CORE_SPREAD_FACTOR: float = 0.4
+const CORE_SIZE_FACTOR: float = 0.4
+const CORE_RAMP_OFFSETS: Array[float] = [0.0, 0.4, 1.0]
+const CORE_RAMP_COLORS: Array[Color] = [
+	Color(1.0, 1.0, 0.85, 0.24), Color(1.0, 0.85, 0.35, 0.14), Color(1.0, 0.5, 0.1, 0.0),
+]
+## Rauchfahne: wenige dunkle, durchscheinende Scheiben, die am Ende der Flamme aufsteigen. Wenig
+## Deckkraft und kurzes Leben: Der Rauch zeigt, wo die Flamme endet, und verdeckt nichts.
+const SMOKE_AMOUNT: int = 10
+const SMOKE_LIFETIME: float = 0.7
+## Der Rauch entsteht bei diesem Anteil der Flammenlänge.
+const SMOKE_AT: float = 0.8
+const SMOKE_RISE: float = 2.2
+const SMOKE_RAMP_OFFSETS: Array[float] = [0.0, 0.25, 1.0]
+const SMOKE_RAMP_COLORS: Array[Color] = [
+	Color(0.3, 0.26, 0.32, 0.0), Color(0.3, 0.26, 0.32, 0.3), Color(0.24, 0.2, 0.3, 0.0),
 ]
 const MIN_LENGTH: float = 0.05
 
 static var _ball_mesh: SphereMesh = null
 static var _color_ramp: Gradient = null
+static var _core_ramp: Gradient = null
+static var _smoke_ramp: Gradient = null
 static var _size_curve: Curve = null
 
 ## Halber Öffnungswinkel des Kegels in Grad (WeaponDefs.cone_deg).
 var cone_deg: float = 14.0
 
 var _particles: CPUParticles3D
+var _core: CPUParticles3D
+var _smoke: CPUParticles3D
 var _light: OmniLight3D
 var _from: Vector3 = Vector3.ZERO
 var _to: Vector3 = Vector3.ZERO
@@ -57,20 +87,21 @@ var _active: bool = false
 
 func _init() -> void:
 	name = "FlameFx"
-	_particles = CPUParticles3D.new()
-	_particles.name = "Particles"
-	_particles.emitting = false
-	_particles.local_coords = false
-	_particles.amount = PARTICLE_AMOUNT
-	_particles.lifetime = PARTICLE_LIFETIME
-	_particles.randomness = 0.25
-	_particles.mesh = _ball()
-	_particles.direction = Vector3.FORWARD
+	_particles = _emitter("Particles", PARTICLE_AMOUNT, PARTICLE_LIFETIME, _ball(), _gradient_ramp())
 	_particles.gravity = Vector3(0.0, RISE, 0.0)
 	_particles.scale_amount_curve = _size_ramp()
-	_particles.color_ramp = _ramp()
-	_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_particles)
+	_core = _emitter("Core", CORE_AMOUNT, CORE_LIFETIME, _ball(), _core_gradient())
+	_core.gravity = Vector3(0.0, RISE, 0.0)
+	_core.scale_amount_curve = _size_ramp()
+	# Der Rauch ist ein eigener Knoten am Ende der Flamme: Er steigt nach oben, nicht nach vorn.
+	_smoke = _emitter("Smoke", SMOKE_AMOUNT, SMOKE_LIFETIME, FxPool.blob_mesh(), _smoke_gradient())
+	_smoke.top_level = true
+	_smoke.direction = Vector3.UP
+	_smoke.spread = 35.0
+	_smoke.initial_velocity_min = SMOKE_RISE * 0.5
+	_smoke.initial_velocity_max = SMOKE_RISE
+	_smoke.gravity = Vector3(0.0, 1.0, 0.0)
+	_smoke.scale_amount_curve = _size_ramp()
 	_light = OmniLight3D.new()
 	_light.name = "Light"
 	_light.light_color = LIGHT_COLOR
@@ -91,6 +122,8 @@ func aim(from: Vector3, to: Vector3) -> void:
 	var length: float = offset.length()
 	if length < MIN_LENGTH:
 		_particles.emitting = false
+		_core.emitting = false
+		_smoke.emitting = false
 		_light.visible = false
 		return
 	var direction: Vector3 = offset / length
@@ -105,14 +138,28 @@ func aim(from: Vector3, to: Vector3) -> void:
 	_particles.scale_amount_max = end_size
 	_particles.scale_amount_min = end_size * SMALL_SIZE_FACTOR
 	_particles.emitting = true
+	var core_speed: float = length * CORE_REACH / CORE_LIFETIME
+	_core.spread = cone_deg * CORE_SPREAD_FACTOR
+	_core.initial_velocity_max = core_speed
+	_core.initial_velocity_min = core_speed * SLOW_SPEED_FACTOR
+	_core.scale_amount_max = end_size * CORE_SIZE_FACTOR
+	_core.scale_amount_min = end_size * CORE_SIZE_FACTOR * SMALL_SIZE_FACTOR
+	_core.emitting = true
+	_smoke.scale_amount_max = end_size * 0.8
+	_smoke.scale_amount_min = end_size * 0.45
+	_smoke.emitting = true
+	if is_inside_tree():
+		_smoke.global_position = from + offset * SMOKE_AT
+		_light.global_position = from + offset * LIGHT_AT
 	_light.visible = true
-	_light.global_position = from + offset * LIGHT_AT
 
 
 ## Dreht die Flamme ab. Was schon fliegt, brennt aus.
 func stop() -> void:
 	_active = false
 	_particles.emitting = false
+	_core.emitting = false
+	_smoke.emitting = false
 	_light.visible = false
 
 
@@ -128,6 +175,23 @@ func get_from() -> Vector3:
 
 func get_to() -> Vector3:
 	return _to
+
+
+## Ein Partikel-Knoten der Flamme in Weltkoordinaten, noch aus.
+func _emitter(node_name: String, amount: int, lifetime: float, mesh: Mesh, ramp: Gradient) -> CPUParticles3D:
+	var particles: CPUParticles3D = CPUParticles3D.new()
+	particles.name = node_name
+	particles.emitting = false
+	particles.local_coords = false
+	particles.amount = amount
+	particles.lifetime = lifetime
+	particles.randomness = 0.25
+	particles.mesh = mesh
+	particles.direction = Vector3.FORWARD
+	particles.color_ramp = ramp
+	particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(particles)
+	return particles
 
 
 ## Rechtwinklige Achsen, deren z-Achse entlang direction (Einheitsvektor) zeigt.
@@ -160,12 +224,29 @@ static func _ball() -> SphereMesh:
 	return _ball_mesh
 
 
-static func _ramp() -> Gradient:
+static func _gradient_ramp() -> Gradient:
 	if _color_ramp == null:
-		_color_ramp = Gradient.new()
-		_color_ramp.offsets = PackedFloat32Array(RAMP_OFFSETS)
-		_color_ramp.colors = PackedColorArray(RAMP_COLORS)
+		_color_ramp = _gradient(RAMP_OFFSETS, RAMP_COLORS)
 	return _color_ramp
+
+
+static func _core_gradient() -> Gradient:
+	if _core_ramp == null:
+		_core_ramp = _gradient(CORE_RAMP_OFFSETS, CORE_RAMP_COLORS)
+	return _core_ramp
+
+
+static func _smoke_gradient() -> Gradient:
+	if _smoke_ramp == null:
+		_smoke_ramp = _gradient(SMOKE_RAMP_OFFSETS, SMOKE_RAMP_COLORS)
+	return _smoke_ramp
+
+
+static func _gradient(offsets: Array[float], colors: Array[Color]) -> Gradient:
+	var gradient: Gradient = Gradient.new()
+	gradient.offsets = PackedFloat32Array(offsets)
+	gradient.colors = PackedColorArray(colors)
+	return gradient
 
 
 ## Größe über das Leben: klein an der Mündung, voll am Ende.

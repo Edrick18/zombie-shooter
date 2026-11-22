@@ -7,14 +7,22 @@ extends CharacterBody3D
 ## Aufbau (entsteht in _ready):
 ##   Zombie (CharacterBody3D, Lage 3, Maske 1 + 2 + 3)
 ##   ├─ Shape      CollisionShape3D, Kapsel über die ganze Körperhöhe
-##   ├─ Body       MeshInstance3D, Rumpf. Trägt alle sichtbaren Teile und wird als Ganzes animiert.
-##   │   ├─ Head   MeshInstance3D, Kugel. Liegt genau im Kopftreffer-Bereich (über HEADSHOT_HEIGHT_RATIO).
-##   │   ├─ ArmL / ArmR   Node3D an der Schulter mit je einem Arm nach vorn
-##   │   ├─ Flames Node3D, nur bei Brand sichtbar
-##   │   └─ Poison Node3D, grüne Giftblasen. Entsteht erst beim ersten Gift, nur bei Gift sichtbar.
+##   ├─ Body       Node3D mit zombie_body.gd: der sichtbare Körper aus elf Teilen (Rumpf, Kopf,
+##   │   │         Augen, Ober- und Unterarme, Ober- und Unterschenkel), siehe dort. Der Kopf
+##   │   │         liegt genau im Kopftreffer-Bereich (über HEADSHOT_HEIGHT_RATIO).
+##   │   ├─ Rig    alle Körperteile
+##   │   ├─ Flames MeshInstance3D, ein Netz. Entsteht erst beim ersten Brand, nur bei Brand sichtbar.
+##   │   └─ Poison Node3D, grüne Giftblasen (zwei Netze). Entsteht erst beim ersten Gift, nur bei
+##   │             Gift sichtbar.
 ##   ├─ NavAgent   NavigationAgent3D
 ##   ├─ Glow       OmniLight3D (nur Elite)
-##   └─ HealthBar  Node3D (nur Elite), dreht sich zur Kamera
+##   ├─ HealthBar  Node3D (nur Elite), dreht sich zur Kamera
+##   └─ Mark       Node3D, pinke Raute über dem Kopf. Entsteht erst bei der ersten Markierung.
+##
+## Aussehen und Bewegung sind reine Optik: Sie ändern nie den Spielzustand und benutzen nie
+## Game.rng. Beim Tod gibt der Zombie seinen Körper ab (zombie_body.gd, release_as_corpse): Der
+## liegt noch ZombieBody.CORPSE_TIME Sekunden herum, ohne Kollision. Der Zombie selbst ist wie
+## bisher nach Balance.ZOMBIE_DEATH_TIME entfernt.
 ##
 ## Bewegung: Ziel ist Game.player. Der Pfad wird alle Balance.ZOMBIE_REPATH_INTERVAL s neu
 ## berechnet. Gibt es kein Navigationsnetz oder keinen Pfad (headless-Test, Spieler abseits des
@@ -22,9 +30,14 @@ extends CharacterBody3D
 
 const Balance := preload("res://scripts/core/balance.gd")
 const WavePlan := preload("res://scripts/core/wave_plan.gd")
+const ZombieBody := preload("res://scripts/game/zombies/zombie_body.gd")
+const ZombieLook := preload("res://scripts/game/zombies/zombie_look.gd")
 
 # --- Reine Optik und Technik ---
 const HOP_MARGIN: float = 0.12
+## Eine Berührung gilt als Wand, wenn ihre Normale höchstens so steil nach oben oder unten zeigt
+## (knapp über cos 45 Grad, der Grenze zwischen Boden und Wand in move_and_slide).
+const WALL_NORMAL_MAX_Y: float = 0.72
 const SEPARATION_INTERVAL: float = 0.1
 ## Waagerechter Abstand (m), ab dem ein Pfadpunkt als erreicht gilt.
 const WAYPOINT_REACHED: float = 0.2
@@ -33,31 +46,49 @@ const FACE_PLAYER_DISTANCE: float = 3.0
 const BURN_EPSILON: float = 0.0001
 const FLASH_TIME: float = 0.09
 const FLASH_STRENGTH: float = 0.75
-const PUNCH_TIME: float = 0.14
+## Aufblitzen bei einem Treffer: Die Farben werden um diesen Faktor heller, dazu leuchtet der
+## Körper weiß (Anteil FLASH_GLOW).
+const FLASH_BRIGHTEN: float = 1.7
+const FLASH_GLOW: float = 0.6
 const SPAWN_GROW_TIME: float = 0.35
 const STRIKE_TIME: float = 0.3
-const WOBBLE_RAD_PER_METER: float = 3.9
-const ARM_RAISED: float = 1.75
-const ARM_SLAM: float = -0.75
-## Neigung des Körpers (Radiant um die Füße). Klein gehalten, damit der sichtbare Kopf über der
-## Kollisionskapsel bleibt und Kopfschüsse dort treffen, wo man den Kopf sieht.
-const WINDUP_LEAN: float = 0.12
-const STRIKE_LEAN: float = -0.32
-const STRIKE_LUNGE: float = 0.14
-const BODY_SHARE: float = 0.8
-const HEAD_RADIUS_SHARE: float = 0.112
-const SHOULDER_SHARE: float = 0.66
-const ARM_LENGTH_SHARE: float = 0.36
-const ARM_THICKNESS_SHARE: float = 0.085
+## Kopfradius des sichtbaren Kopfs als Anteil der Körperhöhe, siehe zombie_look.gd.
+const HEAD_RADIUS_SHARE: float = ZombieLook.HEAD_RADIUS_SHARE
+## Einfärben des Körpers: Anteil der Farbe (TINT) und des Leuchtens in dieser Farbe (GLOW).
 const BURN_COLOR: Color = Color(1.0, 0.45, 0.08)
+const BURN_TINT: float = 0.6
+const BURN_GLOW: float = 0.3
+const BURN_GLOW_FLICKER: float = 0.25
 const FLAME_COLOR: Color = Color(1.0, 0.62, 0.1)
 ## Gift: Färbung des Körpers und Farbe der Blasen.
 const POISON_COLOR: Color = Color(0.3, 1.0, 0.2)
 const POISON_BUBBLE_COLOR: Color = Color(0.45, 1.0, 0.25)
-const POISON_BUBBLE_COUNT: int = 5
-const DEATH_COLOR: Color = Color(0.12, 0.1, 0.1)
+const POISON_CLUSTER_COUNT: int = 2
+const POISON_TINT: float = 0.6
+const POISON_GLOW: float = 0.16
+const POISON_GLOW_PULSE: float = 0.16
+## Abstufung der Animation (nur Optik, spart Rechenzeit bei vielen Zombies): Der Körper wird
+## höchstens so oft je Sekunde neu gestellt, je nach Entfernung zur Kamera. Näher als
+## ANIM_NEAR_DISTANCE Meter einmal je Physikschritt (siehe POSE_WITH_PHYSICS, höchstens
+## ANIM_RATE_NEAR), bis ANIM_MID_DISTANCE ANIM_RATE_MID, weiter weg
+## ANIM_RATE_FAR, hinter der Kamera ANIM_RATE_BEHIND. Ausholen, Schlag, Treffer und Erscheinen
+## laufen immer in jedem Bild. Die Stelle des Zombies in der Welt folgt immer der Physik.
+const ANIM_NEAR_DISTANCE: float = 12.0
+const ANIM_MID_DISTANCE: float = 26.0
+const ANIM_RATE_NEAR: float = 100.0
+const ANIM_RATE_MID: float = 45.0
+const ANIM_RATE_FAR: float = 30.0
+const ANIM_RATE_BEHIND: float = 20.0
+## Antwort von _pose_interval für Zombies in der Nähe: stellen, sobald ein Physikschritt gelaufen
+## ist. Der Zombie bewegt sich nur in Physikschritten (60 je Sekunde). Stellt man den Körper öfter,
+## sieht man davon nichts, aber jedes Stellen schickt elf neue Lagen an den Renderer.
+const POSE_WITH_PHYSICS: float = -1.0
+## Läuft die Physik nicht (Test, der nur _process ruft), wird spätestens nach dieser Zeit gestellt.
+const POSE_MAX_WAIT: float = 0.05
 ## Verlangsamt (Trockeneis, Zeitlupen-Kamera): Der Körper wird eisblau.
 const SLOW_COLOR: Color = Color(0.45, 0.8, 1.0)
+const SLOW_TINT: float = 0.75
+const SLOW_GLOW: float = 0.45
 ## Markiert (Regie-Kamera): eine kleine pinke Raute, die sich über dem Kopf dreht.
 const MARK_COLOR: Color = Color(1.0, 0.2, 0.75)
 const MARK_SIZE: float = 0.2
@@ -66,9 +97,18 @@ const BAR_WIDTH: float = 0.9
 const BAR_HEIGHT: float = 0.09
 
 ## Netz und Material der Giftblasen: einmal für alle Zombies (dieselbe Material-Art wie die Flammen).
-static var _poison_bubble_mesh: SphereMesh = null
+static var _poison_bubble_mesh: ArrayMesh = null
 ## Netz und Material der Markierung teilen sich alle Zombies.
 static var _mark_mesh: PrismMesh = null
+## Netz der Flammen (Höhe 1, wird auf die Körperhöhe gestreckt), für alle Zombies geteilt.
+static var _flame_mesh: ArrayMesh = null
+## Kamera dieses Bilds (einmal je Bild ermittelt), für die Abstufung der Animation.
+static var _view_frame: int = -1
+static var _view_valid: bool = false
+static var _view_origin: Vector3 = Vector3.ZERO
+static var _view_forward: Vector3 = Vector3.FORWARD
+## Materialien des Lebensbalkens der Elite (Hintergrund und Füllung), für alle geteilt.
+static var _bar_materials: Dictionary = {}
 
 ## "walker", "sprinter" oder "elite".
 var zombie_type: String = WavePlan.TYPE_WALKER
@@ -83,24 +123,19 @@ var attack_damage: float = 0.0
 ## Körperhöhe in Metern (Elite: 1,3-fach). Grundlage für Kopftreffer.
 var body_height: float = Balance.ZOMBIE_HEIGHT
 var body_radius: float = Balance.ZOMBIE_RADIUS
+## Bestimmt das Aussehen des Exemplars (Variante, Größe, Eigenheiten). -1: zufällig. Nur Optik.
+## Vor add_child setzen.
+var look_seed: int = -1
 
 var _shape: CollisionShape3D
-var _mesh: MeshInstance3D
-var _head: MeshInstance3D
-var _arm_left: Node3D
-var _arm_right: Node3D
-var _flames: Node3D
+var _body: ZombieBody
+var _flames: MeshInstance3D
 var _glow: OmniLight3D
 var _bar: Node3D
 var _bar_fill: MeshInstance3D
 var _agent: NavigationAgent3D
-var _skin: StandardMaterial3D
 var _base_color: Color = Color.WHITE
 var _base_emission: Color = Color.BLACK
-var _body_rest: Vector3 = Vector3.ZERO
-var _head_rest: Vector3 = Vector3.ZERO
-var _lean_rest: float = 0.0
-var _sway_amount: float = 0.1
 var _glow_energy: float = 0.0
 
 var _knockback: Vector3 = Vector3.ZERO
@@ -113,6 +148,8 @@ var _path: PackedVector3Array = PackedVector3Array()
 var _path_index: int = 0
 var _hop_cooldown_left: float = 0.0
 var _walk_speed_now: float = 0.0
+## Tempo für die Schritte des Körpers: das gewollte Lauftempo, höchstens das wirklich erreichte.
+var _anim_speed: float = 0.0
 var _burn_dps: float = 0.0
 var _burn_left: float = 0.0
 var _burn_accum: float = 0.0
@@ -133,12 +170,17 @@ var _attack_cooldown_left: float = 0.0
 var _death_left: float = 0.0
 
 var _anim_time: float = 0.0
-var _walk_phase: float = 0.0
+var _flicker_phase: float = 0.0
 var _flash_left: float = 0.0
-var _punch: float = 0.0
 var _spawn_grow: float = 0.0
 var _strike_left: float = 0.0
-var _death_side: float = 1.0
+var _corpse_pending: bool = false
+## Zeit seit dem letzten Stellen des Körpers (Sekunden).
+var _pose_delta: float = 0.0
+## Seit dem letzten Stellen des Körpers ist ein Physikschritt gelaufen.
+var _stepped: bool = true
+## Der Körper trägt gerade die Färbung eines laufenden Zustands (Brand, Gift, Treffer).
+var _tint_live: bool = false
 var _material_dirty: bool = true
 
 
@@ -168,8 +210,7 @@ func _ready() -> void:
 	# Zeitversatz, damit nicht alle Zombies im selben Bild rechnen und im Gleichschritt wackeln.
 	_repath_left = randf() * Balance.ZOMBIE_REPATH_INTERVAL
 	_separation_left = randf() * SEPARATION_INTERVAL
-	_walk_phase = randf() * TAU
-	_death_side = -1.0 if randf() < 0.5 else 1.0
+	_flicker_phase = randf() * TAU
 	_animate(0.0)
 
 
@@ -217,6 +258,7 @@ func _physics_process(delta: float) -> void:
 		else:
 			walk = _steer(delta, target.global_position, direct) * speed
 	_move(delta, walk)
+	_stepped = true
 	_face(delta, walk, direct, distance)
 	_tick_attack(delta, target, distance, height_diff, reach_clear)
 
@@ -237,7 +279,8 @@ func take_damage(amount: float, info: Dictionary) -> void:
 		# Brand färbt ohnehin orange und Gift grün, nur echte Treffer blitzen weiß und lassen den
 		# Körper zucken.
 		_flash_left = FLASH_TIME
-		_punch = 1.0
+		if is_instance_valid(_body):
+			_body.kick(1.0, bool(info.get("headshot", false)))
 	_material_dirty = true
 	Events.zombie_damaged.emit(self, amount, info)
 	if hp <= 0.0 and not is_dead:
@@ -258,6 +301,8 @@ func apply_burn(dps: float, duration: float) -> void:
 		_burn_dps = dps
 		_burn_left = duration
 		_burn_accum = 0.0
+	if not is_instance_valid(_flames) and get_body() != null:
+		_build_flames()
 	_material_dirty = true
 
 
@@ -364,7 +409,8 @@ func apply_knockback(impulse: Vector3) -> void:
 	if lift <= 0.0:
 		lift = minf(planar.length() * Balance.ZOMBIE_KNOCKBACK_LIFT_SHARE, Balance.ZOMBIE_KNOCKBACK_LIFT_MAX)
 	_lift = maxf(_lift, lift)
-	_punch = 1.0
+	if is_instance_valid(_body):
+		_body.punch()
 
 
 ## Brennt der Zombie gerade?
@@ -386,6 +432,17 @@ func get_center_position() -> Vector3:
 ## Weltposition der Kopfmitte (liegt sicher im Kopftreffer-Bereich).
 func get_head_position() -> Vector3:
 	return global_position + Vector3(0.0, body_height * (1.0 - HEAD_RADIUS_SHARE), 0.0)
+
+
+## Der sichtbare Körper (zombie_body.gd). null, sobald der Zombie tot ist und seinen Körper
+## abgegeben hat. Nur für Optik und Tests, nie für Spielregeln.
+func get_body() -> Node3D:
+	return _body if is_instance_valid(_body) and _body.get_parent() == self else null
+
+
+## Zahl der MeshInstance3D unter diesem Zombie (jeder sichtbare ist ein Zeichenaufruf).
+func get_mesh_count() -> int:
+	return _count_meshes(self)
 
 
 ## Entfernung (Füße zu Füßen, waagerecht), ab der dieser Zombie zum Schlag ausholt.
@@ -450,9 +507,25 @@ func _die(info: Dictionary) -> void:
 		_bar.visible = false
 	if is_instance_valid(_flames):
 		_flames.visible = false
-	_flash_left = FLASH_TIME
-	_material_dirty = true
+	_start_body_death(info)
 	Events.zombie_killed.emit(self, info)
+
+
+## Lässt den Körper sterben (nur Optik): Die Schadensquelle bestimmt die Todesart, ein
+## Kopfschuss reißt den Kopf ab, der Körper fällt vom Treffer weg.
+func _start_body_death(info: Dictionary) -> void:
+	if not is_instance_valid(_body):
+		return
+	var push: Vector3 = Vector3.ZERO
+	var hit: Variant = info.get("hit_position")
+	if hit is Vector3 and is_inside_tree():
+		var away: Vector3 = get_center_position() - (hit as Vector3)
+		away.y = 0.0
+		if away.length_squared() > 0.0025:
+			# In den Raum des Zombies gedreht (vorn ist -Z).
+			push = away.normalized() * global_transform.basis.orthonormalized()
+	_body.start_death(ZombieBody.death_mode_for(String(info.get("source", ""))), bool(info.get("headshot", false)), push)
+	_corpse_pending = true
 
 
 ## Brand: sammelt die Zeit und zieht je vollem Tick-Abstand Schaden ab. Läuft der Brand
@@ -516,7 +589,7 @@ func _clear_poison() -> void:
 ## vergiftet wird: Die meisten Zombies brauchen sie nie.
 func _show_poison_marker(shown: bool) -> void:
 	if not is_instance_valid(_poison_marker):
-		if not shown or not is_instance_valid(_mesh):
+		if not shown or get_body() == null:
 			return
 		_build_poison_marker()
 	_poison_marker.visible = shown
@@ -618,10 +691,29 @@ func _move(delta: float, walk: Vector3) -> void:
 	_lift = 0.0
 	_knockback = _knockback.move_toward(Vector3.ZERO, Balance.ZOMBIE_KNOCKBACK_DAMPING * delta)
 	move_and_slide()
+	# Nur für die Optik: Wer an einer Wand oder im Gedränge hängt, tritt nicht auf der Stelle.
+	_anim_speed = minf(_walk_speed_now, Vector2(velocity.x, velocity.z).length())
 	_hop_cooldown_left = maxf(0.0, _hop_cooldown_left - delta)
 	if _hop_cooldown_left <= 0.0 and control > 0.5 and walk.length_squared() > 0.01:
-		if is_on_floor() and is_on_wall():
+		# Schneller: Im Gedränge ist die "Wand" fast immer ein anderer Zombie. Der ist für einen
+		# Sprung immer zu hoch, die bis zu neun Bewegungsproben in _try_hop wären umsonst (gemessen
+		# etwa 130 µs je blockiertem Zombie und Physikschritt, bei 48 Zombies über die Hälfte des
+		# ganzen Schritts). Geprobt wird nur noch an Wänden der Welt.
+		if is_on_floor() and is_on_wall() and _touches_world_wall():
 			_try_hop(walk.normalized())
+
+
+## Berührt der Zombie nach move_and_slide eine Wand der Welt (Kante, Stufe, Kulisse)? Andere
+## Zombies und der Spieler (beide CharacterBody3D) zählen nicht, Boden und Decke auch nicht.
+func _touches_world_wall() -> bool:
+	for index: int in get_slide_collision_count():
+		var collision: KinematicCollision3D = get_slide_collision(index)
+		for contact: int in collision.get_collision_count():
+			if absf(collision.get_normal(contact).y) > WALL_NORMAL_MAX_Y:
+				continue
+			if not (collision.get_collider(contact) is CharacterBody3D):
+				return true
+	return false
 
 
 ## Abstoßung: schiebt den Zombie von nahen Artgenossen weg, damit sie sich um den Spieler
@@ -742,11 +834,8 @@ func _has_clear_reach(target: Node3D) -> bool:
 func _build_body() -> void:
 	var def: Dictionary = Balance.ZOMBIE_TYPES[zombie_type]
 	var is_elite: bool = zombie_type == WavePlan.TYPE_ELITE
-	var is_sprinter: bool = zombie_type == WavePlan.TYPE_SPRINTER
 	_base_color = def["color"]
-	_base_emission = _base_color * 0.55 if bool(def["glow"]) else Color.BLACK
-	_lean_rest = -0.16 if is_sprinter else -0.06
-	_sway_amount = 0.06 if is_sprinter else 0.09
+	_base_emission = ZombieLook.base_emission(zombie_type)
 
 	var capsule: CapsuleShape3D = CapsuleShape3D.new()
 	capsule.radius = body_radius
@@ -757,168 +846,68 @@ func _build_body() -> void:
 	_shape.position = Vector3(0.0, body_height * 0.5, 0.0)
 	add_child(_shape)
 
-	_skin = StandardMaterial3D.new()
-	_skin.albedo_color = _base_color
-	_skin.roughness = 0.85
-	# Leuchten bleibt immer an (schwarz = aus), damit Aufblitzen und Brand kein neues Material brauchen.
-	_skin.emission_enabled = true
-	_skin.emission = _base_emission
-
-	# Rumpf: von den Füßen bis knapp über die Kopftreffer-Grenze, der Kopf sitzt darauf.
-	var torso_height: float = body_height * BODY_SHARE
-	var torso_radius: float = body_radius * (0.72 if is_sprinter else 0.86)
-	var torso: CapsuleMesh = CapsuleMesh.new()
-	torso.radius = torso_radius
-	torso.height = torso_height
-	torso.radial_segments = 12
-	torso.rings = 4
-	torso.material = _skin
-	_body_rest = Vector3(0.0, torso_height * 0.5, 0.0)
-	_mesh = MeshInstance3D.new()
-	_mesh.name = "Body"
-	_mesh.mesh = torso
-	_mesh.position = _body_rest
-	add_child(_mesh)
-
-	# Kopf: Kugel von HEADSHOT_HEIGHT_RATIO bis zum Scheitel.
-	var head_radius: float = body_height * HEAD_RADIUS_SHARE
-	var head_mesh: SphereMesh = SphereMesh.new()
-	head_mesh.radius = head_radius
-	head_mesh.height = head_radius * 2.0
-	head_mesh.radial_segments = 12
-	head_mesh.rings = 6
-	head_mesh.material = _skin
-	_head_rest = Vector3(0.0, body_height - head_radius, 0.0) - _body_rest
-	_head = MeshInstance3D.new()
-	_head.name = "Head"
-	_head.mesh = head_mesh
-	_head.position = _head_rest
-	_mesh.add_child(_head)
-	_build_eyes(head_radius, is_elite, is_sprinter)
-	if is_elite:
-		_build_crown(head_radius)
-
-	var shoulder_y: float = body_height * SHOULDER_SHARE - _body_rest.y
-	var shoulder_x: float = torso_radius + body_height * ARM_THICKNESS_SHARE * 0.4
-	_arm_left = _build_arm("ArmL", Vector3(-shoulder_x, shoulder_y, 0.0))
-	_arm_right = _build_arm("ArmR", Vector3(shoulder_x, shoulder_y, 0.0))
-	_build_flames(torso_radius)
+	# Der sichtbare Körper. Sein Zufall kommt nie aus Game.rng: Ein Lauf mit festem Seed bleibt gleich.
+	_body = ZombieBody.new()
+	_body.setup(zombie_type, look_seed if look_seed >= 0 else randi())
+	add_child(_body)
 	if is_elite:
 		_build_glow()
 		_build_health_bar()
 
 
-func _build_eyes(head_radius: float, is_elite: bool, is_sprinter: bool) -> void:
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	if is_elite:
-		material.albedo_color = Color(1.0, 0.12, 0.08)
-	elif is_sprinter:
-		material.albedo_color = Color(1.0, 1.0, 0.85)
-	else:
-		material.albedo_color = Color(1.0, 0.86, 0.25)
-	var eye_mesh: SphereMesh = SphereMesh.new()
-	eye_mesh.radius = head_radius * 0.22
-	eye_mesh.height = head_radius * 0.44
-	eye_mesh.radial_segments = 8
-	eye_mesh.rings = 4
-	eye_mesh.material = material
-	for side: float in [-1.0, 1.0]:
-		var eye: MeshInstance3D = MeshInstance3D.new()
-		eye.name = "EyeL" if side < 0.0 else "EyeR"
-		eye.mesh = eye_mesh
-		# Vorn ist -Z.
-		eye.position = Vector3(side * head_radius * 0.4, head_radius * 0.18, -head_radius * 0.86)
-		_head.add_child(eye)
-
-
-## Die Elite ist der Stargast der Show: Sie trägt eine Krone.
-func _build_crown(head_radius: float) -> void:
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.albedo_color = Color(1.0, 0.9, 0.35)
-	material.emission_enabled = true
-	material.emission = Color(1.0, 0.75, 0.1)
-	material.metallic = 0.6
-	material.roughness = 0.3
-	var crown_mesh: CylinderMesh = CylinderMesh.new()
-	crown_mesh.top_radius = head_radius * 0.85
-	crown_mesh.bottom_radius = head_radius * 0.62
-	crown_mesh.height = head_radius * 0.6
-	crown_mesh.radial_segments = 6
-	crown_mesh.rings = 1
-	crown_mesh.material = material
-	var crown: MeshInstance3D = MeshInstance3D.new()
-	crown.name = "Crown"
-	crown.mesh = crown_mesh
-	crown.position = Vector3(0.0, head_radius * 0.95, 0.0)
-	_head.add_child(crown)
-
-
-## Arm: Drehpunkt an der Schulter, der Quader zeigt nach vorn (-Z). rotation.x > 0 hebt den Arm.
-func _build_arm(arm_name: String, shoulder: Vector3) -> Node3D:
-	var length: float = body_height * ARM_LENGTH_SHARE
-	var thickness: float = body_height * ARM_THICKNESS_SHARE
-	var arm_mesh: BoxMesh = BoxMesh.new()
-	arm_mesh.size = Vector3(thickness, thickness, length)
-	arm_mesh.material = _skin
-	var pivot: Node3D = Node3D.new()
-	pivot.name = arm_name
-	pivot.position = shoulder
-	var arm: MeshInstance3D = MeshInstance3D.new()
-	arm.name = "Mesh"
-	arm.mesh = arm_mesh
-	arm.position = Vector3(0.0, 0.0, -length * 0.5)
-	pivot.add_child(arm)
-	_mesh.add_child(pivot)
-	return pivot
-
-
-func _build_flames(torso_radius: float) -> void:
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = FLAME_COLOR
-	var flame_mesh: SphereMesh = SphereMesh.new()
-	flame_mesh.radius = body_height * 0.06
-	flame_mesh.height = body_height * 0.24
-	flame_mesh.radial_segments = 6
-	flame_mesh.rings = 3
-	flame_mesh.material = material
-	_flames = Node3D.new()
+## Flammen: zwei Kränze aus Tropfen um den Körper (unten weit, oben eng) in einem einzigen Netz,
+## das sich dreht und flackert. Das Netz teilen sich alle Zombies, seine Höhe ist 1: Der Knoten
+## streckt es auf die Körperhöhe. Entsteht erst, wenn ein Zombie zum ersten Mal brennt.
+func _build_flames() -> void:
+	if _flame_mesh == null:
+		var material: StandardMaterial3D = StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.albedo_color = FLAME_COLOR
+		var part: ZombieLook.Part = ZombieLook.Part.new(1.0)
+		for ring: int in 2:
+			var count: int = 4 if ring == 0 else 3
+			for i: int in count:
+				var angle: float = TAU * float(i) / float(count) + 0.6 * float(ring)
+				var radius: float = 0.17 if ring == 0 else 0.11
+				var height: float = (0.3 + 0.07 * float(i)) if ring == 0 else (0.62 + 0.1 * float(i))
+				var at: Vector3 = Vector3(cos(angle) * radius, height, sin(angle) * radius)
+				# Tropfenform: unten rund, oben spitz.
+				part.ball(at, Vector3(0.05, 0.06, 0.05), Color.WHITE)
+				part.tube(at + Vector3(0.0, 0.1, 0.0), 0.046, 0.0, 0.16, Color.WHITE, Vector3.ZERO, 1.0, 8)
+		_flame_mesh = part.build(material)
+	_flames = MeshInstance3D.new()
 	_flames.name = "Flames"
+	_flames.mesh = _flame_mesh
 	_flames.visible = false
-	for i: int in 4:
-		var flame: MeshInstance3D = MeshInstance3D.new()
-		flame.name = "Flame%d" % i
-		flame.mesh = flame_mesh
-		var angle: float = TAU * float(i) / 4.0 + 0.6
-		flame.position = Vector3(cos(angle) * torso_radius, body_height * (0.05 * float(i) - 0.05), sin(angle) * torso_radius)
-		_flames.add_child(flame)
-	_mesh.add_child(_flames)
+	_flames.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_flames.scale = Vector3.ONE * body_height
+	_body.add_child(_flames)
 
 
-## Giftblasen: kleine grüne Kugeln, die am Körper aufsteigen (_animate_poison). Netz und Material
-## teilen sich alle Zombies.
+## Giftblasen: kleine grüne Kugeln, die am Körper aufsteigen (_animate_poison). Je drei Blasen
+## sind ein Netz (eine Traube), POISON_CLUSTER_COUNT Trauben steigen versetzt. Netz und Material
+## teilen sich alle Zombies, die Höhe des Netzes ist 1 (der Knoten streckt es auf die Körperhöhe).
 func _build_poison_marker() -> void:
 	if _poison_bubble_mesh == null:
 		var material: StandardMaterial3D = StandardMaterial3D.new()
 		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		material.albedo_color = POISON_BUBBLE_COLOR
-		_poison_bubble_mesh = SphereMesh.new()
-		_poison_bubble_mesh.radius = 0.5
-		_poison_bubble_mesh.height = 1.0
-		_poison_bubble_mesh.radial_segments = 8
-		_poison_bubble_mesh.rings = 4
-		_poison_bubble_mesh.material = material
+		var part: ZombieLook.Part = ZombieLook.Part.new(1.0)
+		var sizes: Array[float] = [0.042, 0.03, 0.022]
+		for i: int in sizes.size():
+			var angle: float = TAU * float(i) / float(sizes.size())
+			part.ball(Vector3(cos(angle) * 0.19, 0.07 * float(i - 1), sin(angle) * 0.19), Vector3.ONE * sizes[i], Color.WHITE)
+		_poison_bubble_mesh = part.build(material)
 	_poison_marker = Node3D.new()
 	_poison_marker.name = "Poison"
 	_poison_marker.visible = false
-	for i: int in POISON_BUBBLE_COUNT:
-		var bubble: MeshInstance3D = MeshInstance3D.new()
-		bubble.name = "Bubble%d" % i
-		bubble.mesh = _poison_bubble_mesh
-		bubble.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_poison_marker.add_child(bubble)
-	_mesh.add_child(_poison_marker)
+	for i: int in POISON_CLUSTER_COUNT:
+		var cluster: MeshInstance3D = MeshInstance3D.new()
+		cluster.name = "Bubbles%d" % i
+		cluster.mesh = _poison_bubble_mesh
+		cluster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_poison_marker.add_child(cluster)
+	_body.add_child(_poison_marker)
 	_animate_poison()
 
 
@@ -977,13 +966,15 @@ func _build_health_bar() -> void:
 
 
 func _make_bar_quad(size: Vector2, color: Color) -> QuadMesh:
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = color
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if not _bar_materials.has(color):
+		var material: StandardMaterial3D = StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.albedo_color = color
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_bar_materials[color] = material
 	var quad: QuadMesh = QuadMesh.new()
 	quad.size = size
-	quad.material = material
+	quad.material = _bar_materials[color]
 	return quad
 
 
@@ -1000,146 +991,132 @@ func _build_agent() -> void:
 # --- Animation (nur Optik, ändert nie den Spielzustand) ---------------------------------------
 
 func _animate(delta: float) -> void:
-	if not is_instance_valid(_mesh):
-		return
 	_anim_time += delta
 	_flash_left = maxf(0.0, _flash_left - delta)
-	_punch = move_toward(_punch, 0.0, delta / PUNCH_TIME)
 	_spawn_grow = move_toward(_spawn_grow, 1.0, delta / SPAWN_GROW_TIME)
 	_strike_left = maxf(0.0, _strike_left - delta)
 	if is_dead:
 		_animate_death()
-	else:
-		_animate_alive(delta)
-	_update_material()
+	elif is_instance_valid(_body):
+		_update_material(_animate_alive(delta))
 
 
-func _animate_alive(delta: float) -> void:
-	var size_factor: float = body_height / Balance.ZOMBIE_HEIGHT
-	# Der Gang wackelt mit der gelaufenen Strecke, im Stand nur ganz leicht.
-	_walk_phase += (_walk_speed_now * WOBBLE_RAD_PER_METER / size_factor + 0.9) * delta
-	var stride: float = clampf(_walk_speed_now / 1.4, 0.2, 1.0)
-	var swing: float = sin(_walk_phase)
-	var sway: float = swing * _sway_amount * stride
-	var bob: float = absf(swing) * 0.035 * body_height * stride
-	var lean: float = _lean_rest
-	# Die Arme bleiben waagerecht, auch wenn der Körper sich vorbeugt.
-	var arm_rest: float = -_lean_rest + 0.05
-	var arm_left: float = arm_rest + swing * 0.2 * stride
-	var arm_right: float = arm_rest - swing * 0.2 * stride
-	var forward: float = 0.0
-	if _windup_left >= 0.0:
-		# Ausholen: Arme hoch über den Kopf, Körper lehnt sich zurück. Das ist die Warnung.
-		var raise: float = 1.0 - clampf(_windup_left / Balance.ZOMBIE_ATTACK_WINDUP, 0.0, 1.0)
-		raise = 1.0 - (1.0 - raise) * (1.0 - raise)
-		arm_left = lerpf(arm_left, ARM_RAISED, raise)
-		arm_right = lerpf(arm_right, ARM_RAISED, raise)
-		lean = lerpf(lean, WINDUP_LEAN, raise)
-		forward = 0.04 * body_height * raise
-	elif _strike_left > 0.0:
-		# Schlag: Arme sausen herunter, der Körper stößt vor und richtet sich dann wieder auf.
-		var progress: float = 1.0 - _strike_left / STRIKE_TIME
-		if progress < 0.3:
-			var slam: float = progress / 0.3
-			arm_left = lerpf(ARM_RAISED, ARM_SLAM, slam)
-			arm_right = arm_left
-			lean = lerpf(WINDUP_LEAN, STRIKE_LEAN, slam)
-			forward = lerpf(0.04, -STRIKE_LUNGE, slam) * body_height
-		else:
-			var recover: float = (progress - 0.3) / 0.7
-			arm_left = lerpf(ARM_SLAM, arm_left, recover)
-			arm_right = lerpf(ARM_SLAM, arm_right, recover)
-			lean = lerpf(STRIKE_LEAN, lean, recover)
-			forward = -STRIKE_LUNGE * body_height * (1.0 - recover)
-	# Treffer: kurzes Zucken nach hinten und Stauchen.
-	lean += 0.1 * _punch
-	var grow: float = _ease_out_back(_spawn_grow)
-	var squash: Vector3 = Vector3(
-		(1.0 + 0.16 * _punch) * lerpf(0.7, 1.0, grow),
-		(1.0 - 0.1 * _punch) * maxf(grow, 0.05),
-		(1.0 + 0.16 * _punch) * lerpf(0.7, 1.0, grow))
-	_pose_body(lean, sway, Vector3(0.0, bob, forward), squash)
-	_head.position = _head_rest
-	_head.rotation = Vector3(-lean * 0.5, 0.0, sin(_walk_phase * 0.5 + 1.3) * 0.2)
-	_arm_left.rotation = Vector3(arm_left, 0.0, 0.0)
-	_arm_right.rotation = Vector3(arm_right, 0.0, 0.0)
-	_animate_flames()
-	_animate_poison()
+## Bewegt alles Sichtbare am lebenden Zombie. Gibt zurück, ob der Körper in diesem Bild neu
+## gestellt wurde: Flammen, Giftblasen, das Licht der Elite und das Flackern der Färbung laufen
+## im selben Takt mit (schneller: weniger neue Lagen und Materialwerte für den Renderer).
+func _animate_alive(delta: float) -> bool:
+	_pose_delta += delta
+	var interval: float = _pose_interval()
+	var posed: bool = _pose_delta >= interval
+	if interval == POSE_WITH_PHYSICS:
+		posed = (_stepped and _pose_delta >= 1.0 / ANIM_RATE_NEAR) or _pose_delta >= POSE_MAX_WAIT
+	if posed:
+		_pose_body(_pose_delta)
+		_pose_delta = 0.0
+		_stepped = false
+	_animate_flames(posed)
+	_animate_poison(posed)
 	if is_instance_valid(_mark_marker) and _mark_marker.visible:
 		_mark_marker.rotation.y = _anim_time * 3.0
-	if is_instance_valid(_glow):
+	if posed and is_instance_valid(_glow):
 		_glow.light_energy = _glow_energy * (1.0 + 0.25 * sin(_anim_time * 5.0))
 	if is_instance_valid(_bar):
 		_update_health_bar()
 	if delta > 0.0 and _burn_left > 0.0:
 		_material_dirty = true
+	return posed
 
 
-## Tod: Der Körper kippt nach hinten, der Kopf fliegt davon, die Arme klappen weg, am Ende
-## schrumpft alles in den Boden. Dauert Balance.ZOMBIE_DEATH_TIME.
+## Stellt den Körper für dieses Bild. delta ist die Zeit seit dem letzten Stellen.
+func _pose_body(delta: float) -> void:
+	# Ausholen und Schlag als Fortschritt von 0 bis 1, sonst -1.
+	var windup: float = -1.0
+	var strike: float = -1.0
+	if _windup_left >= 0.0:
+		windup = 1.0 - clampf(_windup_left / Balance.ZOMBIE_ATTACK_WINDUP, 0.0, 1.0)
+	elif _strike_left > 0.0:
+		strike = 1.0 - _strike_left / STRIKE_TIME
+	# Rückstoß im Raum des Zombies: Der Körper taumelt in die Richtung, in die er fliegt.
+	var stagger: Vector3 = Vector3.ZERO
+	if _knockback.length_squared() > 0.0001:
+		stagger = (_knockback * global_transform.basis) / Balance.ZOMBIE_STAGGER_KNOCKBACK_SPEED
+	_body.pose_alive(delta, _anim_speed, windup, strike, stagger, _spawn_grow)
+
+
+## Wie viele Sekunden mindestens zwischen zwei Stellungen des Körpers liegen (siehe
+## ANIM_NEAR_DISTANCE). 0 = in jedem Bild: ohne Kamera (headless-Test) und bei allem, was man
+## genau sehen soll. POSE_WITH_PHYSICS = einmal je Physikschritt (Zombies in der Nähe).
+func _pose_interval() -> float:
+	if _windup_left >= 0.0 or _strike_left > 0.0 or _spawn_grow < 1.0 or _flash_left > 0.0:
+		return 0.0
+	var frame: int = Engine.get_process_frames()
+	if frame != _view_frame:
+		_view_frame = frame
+		var viewport: Viewport = get_viewport()
+		var camera: Camera3D = viewport.get_camera_3d() if viewport != null else null
+		_view_valid = camera != null
+		if _view_valid:
+			var view: Transform3D = camera.global_transform
+			_view_origin = view.origin
+			_view_forward = -view.basis.z
+	if not _view_valid:
+		return 0.0
+	var offset: Vector3 = global_position - _view_origin
+	var distance_squared: float = offset.length_squared()
+	if distance_squared < ANIM_NEAR_DISTANCE * ANIM_NEAR_DISTANCE:
+		return POSE_WITH_PHYSICS
+	if offset.dot(_view_forward) < 0.0:
+		return 1.0 / ANIM_RATE_BEHIND
+	return 1.0 / (ANIM_RATE_MID if distance_squared < ANIM_MID_DISTANCE * ANIM_MID_DISTANCE else ANIM_RATE_FAR)
+
+
+## Tod: Der Körper spielt ihn selbst (zombie_body.gd). Hier wird er nur abgegeben, damit er
+## liegen bleiben kann, wenn der Zombie nach Balance.ZOMBIE_DEATH_TIME entfernt wird. Das
+## Licht der Elite flackert in dieser Zeit aus.
 func _animate_death() -> void:
+	if _corpse_pending and is_inside_tree():
+		_corpse_pending = false
+		if is_instance_valid(_body):
+			_body.release_as_corpse()
 	var progress: float = 1.0 - clampf(_death_left / Balance.ZOMBIE_DEATH_TIME, 0.0, 1.0)
-	var fall: float = progress * progress
-	var shrink: float = 1.0
-	if progress > 0.65:
-		shrink = maxf(0.02, 1.0 - (progress - 0.65) / 0.35)
-	var pop: float = 1.0 + 0.25 * sin(minf(progress * 4.0, 1.0) * PI)
-	_pose_body(lerpf(_lean_rest, 1.35, fall), _death_side * 0.3 * fall,
-			Vector3(0.0, -0.08 * body_height * fall, 0.1 * body_height * fall),
-			Vector3(pop, 1.0, pop) * shrink)
-	_head.position = _head_rest + Vector3(
-			_death_side * 0.35 * body_height * progress,
-			0.45 * body_height * sin(progress * PI * 0.85),
-			0.2 * body_height * progress)
-	_head.rotation = Vector3(progress * 7.0, 0.0, _death_side * progress * 4.0)
-	_arm_left.rotation = Vector3(lerpf(0.0, 1.2, progress), 0.0, 1.5 * progress)
-	_arm_right.rotation = Vector3(lerpf(0.0, 1.2, progress), 0.0, -1.5 * progress)
 	if is_instance_valid(_glow):
 		_glow.light_energy = _glow_energy * (1.0 - progress) * (1.0 + 2.0 * sin(progress * PI))
-	_material_dirty = true
 
 
-## Setzt den Rumpf (und damit alle Körperteile): Drehung und Stauchung wirken um die Füße.
-func _pose_body(lean: float, sway: float, offset: Vector3, squash: Vector3) -> void:
-	var turned: Basis = Basis.from_euler(Vector3(lean, 0.0, sway))
-	var basis_scaled: Basis = Basis(turned.x * squash.x, turned.y * squash.y, turned.z * squash.z)
-	_mesh.transform = Transform3D(basis_scaled, basis_scaled * _body_rest + offset)
-
-
-func _animate_flames() -> void:
+func _animate_flames(posed: bool = true) -> void:
+	if not is_instance_valid(_flames):
+		return
 	var burning: bool = _burn_left > 0.0
+	var appeared: bool = burning and not _flames.visible
 	if _flames.visible != burning:
 		_flames.visible = burning
-	if not burning:
+	if not burning or not (posed or appeared):
 		return
-	var index: int = 0
-	for child: Node in _flames.get_children():
-		var flame: Node3D = child as Node3D
-		if flame != null:
-			var flicker: float = 0.75 + 0.45 * sin(_anim_time * 19.0 + float(index) * 1.9)
-			flame.scale = Vector3(1.0, flicker * 1.6, 1.0)
-		index += 1
-	_flames.rotation.y = _anim_time * 2.5
+	var flicker: float = 0.9 + 0.3 * sin(_anim_time * 19.0 + _flicker_phase)
+	_flames.transform = Transform3D(
+			Basis(Vector3.UP, _anim_time * 2.5).scaled(Vector3(body_height, body_height * flicker, body_height)), Vector3.ZERO)
 
 
-## Giftblasen: Jede steigt versetzt vom Bauch bis über den Kopf und wird dabei kleiner.
-func _animate_poison() -> void:
+## Giftblasen: Jede Traube steigt versetzt vom Bauch bis über den Kopf, dreht sich und wird dabei
+## kleiner. Der Ursprung des Behälters sind die Füße.
+func _animate_poison(posed: bool = true) -> void:
 	if not is_instance_valid(_poison_marker):
 		return
 	var poisoned: bool = _poison_left > 0.0 and not is_dead
+	var appeared: bool = poisoned and not _poison_marker.visible
 	if _poison_marker.visible != poisoned:
 		_poison_marker.visible = poisoned
-	if not poisoned:
+	if not poisoned or not (posed or appeared):
 		return
 	var index: int = 0
 	for child: Node in _poison_marker.get_children():
-		var bubble: Node3D = child as Node3D
-		if bubble != null:
-			var rise: float = fposmod(_anim_time * 0.8 + float(index) / float(POISON_BUBBLE_COUNT), 1.0)
-			var angle: float = float(index) * 2.4 + _anim_time * 0.7
-			var radius: float = body_radius * (1.05 - 0.35 * rise)
-			bubble.position = Vector3(cos(angle) * radius, body_height * (-0.12 + 0.78 * rise), sin(angle) * radius)
-			bubble.scale = Vector3.ONE * body_height * 0.085 * (1.0 - 0.65 * rise)
+		var cluster: Node3D = child as Node3D
+		if cluster != null:
+			var rise: float = fposmod(_anim_time * 0.8 + float(index) / float(POISON_CLUSTER_COUNT), 1.0)
+			var size: float = body_height * (1.0 - 0.5 * rise)
+			cluster.transform = Transform3D(
+					Basis(Vector3.UP, float(index) * 2.4 + _anim_time * 1.7).scaled(Vector3(size, size, size)),
+					Vector3(0.0, body_height * (0.3 + 0.72 * rise), 0.0))
 		index += 1
 
 
@@ -1154,45 +1131,54 @@ func _update_health_bar() -> void:
 		_bar.global_transform = Transform3D(camera.global_transform.basis.orthonormalized(), _bar.global_position)
 
 
-## Farbe des Körpers aus Grundfarbe, Verlangsamung (eisblau), Brand (orange, flackernd), Gift
-## (grün, pulsierend), Treffer (weiß) und Tod (dunkel).
-func _update_material() -> void:
-	var burning: bool = _burn_left > 0.0 and not is_dead
-	var poisoned: bool = _poison_left > 0.0 and not is_dead
-	var slowed: bool = _slow_left > 0.0 and not is_dead
-	var active: bool = burning or poisoned or _flash_left > 0.0 or is_dead
+## Färbung des lebenden Körpers aus Verlangsamung (eisblau), Brand (orange, flackernd), Gift
+## (grün, pulsierend) und Treffer (hell). Die Farben des Körpers stecken in seinen Netzen, deshalb
+## wird hier nicht die Farbe gesetzt, sondern multipliziert (mul) und dazu geleuchtet (emission).
+## Ohne Färbung benutzt der Körper das geteilte Material seines Typs. Den toten Körper färbt
+## zombie_body.gd selbst dunkel.
+## posed: Der Körper wurde in diesem Bild neu gestellt. Das Flackern von Brand und Gift läuft nur
+## in diesen Bildern weiter (jede neue Farbe ist ein neuer Materialwert für den Renderer), das
+## Aufblitzen bei einem Treffer und jeder Wechsel des Zustands wirken sofort.
+func _update_material(posed: bool = true) -> void:
+	var burning: bool = _burn_left > 0.0
+	var poisoned: bool = _poison_left > 0.0
+	var slowed: bool = _slow_left > 0.0
+	var flashing: bool = _flash_left > 0.0
+	var active: bool = burning or poisoned or flashing
 	if not active and not _material_dirty:
 		return
+	if active and not flashing and not posed and _tint_live:
+		return
 	_material_dirty = active
-	var albedo: Color = _base_color
+	_tint_live = active
+	if not active and not slowed:
+		_body.clear_tint()
+		return
+	var mul: Color = Color.WHITE
 	var emission: Color = _base_emission
 	if slowed:
 		# Ruhige Färbung ohne Pulsieren: Sie muss nicht in jedem Bild neu gesetzt werden.
-		albedo = albedo.lerp(SLOW_COLOR, 0.55)
-		emission = emission.lerp(SLOW_COLOR, 0.25)
+		mul = mul.lerp(SLOW_COLOR, SLOW_TINT)
+		emission = emission.lerp(SLOW_COLOR, SLOW_GLOW)
 	if burning:
-		var flicker: float = 0.5 + 0.5 * sin(_anim_time * 23.0 + _walk_phase)
-		albedo = albedo.lerp(BURN_COLOR, 0.6)
-		emission = emission.lerp(BURN_COLOR, 0.45 + 0.3 * flicker)
+		var flicker: float = 0.5 + 0.5 * sin(_anim_time * 23.0 + _flicker_phase)
+		mul = mul.lerp(BURN_COLOR, BURN_TINT)
+		emission = emission.lerp(BURN_COLOR, BURN_GLOW + BURN_GLOW_FLICKER * flicker)
 	if poisoned:
 		# Brennt der Zombie zugleich, mischen sich beide Farben: Man sieht beides.
-		var pulse: float = 0.5 + 0.5 * sin(_anim_time * 5.0 + _walk_phase)
-		albedo = albedo.lerp(POISON_COLOR, 0.55)
-		emission = emission.lerp(POISON_COLOR, 0.2 + 0.2 * pulse)
-	if is_dead:
-		var progress: float = 1.0 - clampf(_death_left / Balance.ZOMBIE_DEATH_TIME, 0.0, 1.0)
-		albedo = albedo.lerp(DEATH_COLOR, progress * 0.8)
-		emission = emission.lerp(Color.BLACK, progress)
-	if _flash_left > 0.0:
+		var pulse: float = 0.5 + 0.5 * sin(_anim_time * 5.0 + _flicker_phase)
+		mul = mul.lerp(POISON_COLOR, POISON_TINT)
+		emission = emission.lerp(POISON_COLOR, POISON_GLOW + POISON_GLOW_PULSE * pulse)
+	if flashing:
 		# Nicht bis ganz weiß: Unter Dauerfeuer bliebe sonst nur ein weißer Fleck ohne Form.
 		var flash: float = clampf(_flash_left / FLASH_TIME, 0.0, 1.0) * FLASH_STRENGTH
-		albedo = albedo.lerp(Color.WHITE, flash)
-		emission = emission.lerp(Color.WHITE, flash * 0.3)
-	_skin.albedo_color = albedo
-	_skin.emission = emission
+		mul = mul.lerp(Color(FLASH_BRIGHTEN, FLASH_BRIGHTEN, FLASH_BRIGHTEN), flash)
+		emission = emission.lerp(Color.WHITE, flash * FLASH_GLOW)
+	_body.set_tint(mul, emission)
 
 
-## Weiches Überschwingen (0 -> 1), für das Aufrichten beim Erscheinen.
-func _ease_out_back(value: float) -> float:
-	var shifted: float = clampf(value, 0.0, 1.0) - 1.0
-	return 1.0 + 2.70158 * shifted * shifted * shifted + 1.70158 * shifted * shifted
+func _count_meshes(node: Node) -> int:
+	var count: int = 1 if node is MeshInstance3D else 0
+	for child: Node in node.get_children():
+		count += _count_meshes(child)
+	return count

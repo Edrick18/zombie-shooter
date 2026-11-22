@@ -2,7 +2,8 @@ extends RefCounted
 ## Modul: Upgrades (scripts/game/upgrades).
 ## Kurzlebige Bilder für die Kameras und Gegenstände aus Abschnitt 22: Strahl (Tele-Kamera,
 ## Zeitlupe, Markierung, Querschläger), Blitzlicht-Fächer am Boden, Aufblitzen an der Kamera,
-## Stachelkranz der Kaktus-Requisite. fx.gd bleibt unverändert, hier stehen nur die neuen Bilder.
+## Stachelkranz der Kaktus-Requisite. Die allgemeinen Effekte stehen in fx.gd, hier nur diese Bilder.
+## Jeder Strahl hat einen deckenden Kern und darum einen leuchtenden Schein (die Stacheln nicht).
 ##
 ## Dieselben Regeln wie in fx.gd:
 ## - nur statische Funktionen, Einbinden mit const UpgradeFx := preload(".../upgrade_fx.gd")
@@ -21,6 +22,13 @@ const BEAM_HOLD_SHARE: float = 0.35
 ## Ein Strahl ist ein Kegelstumpf: So viel seiner Breite hat das schmale Ende.
 const BEAM_TAPER: float = 0.2
 const BEAM_SIDES: int = 6
+## Schein um einen Strahl: so viel breiter als der Kern und so deckend. Er fällt etwas früher
+## zusammen als der Kern (Anteil der Zeit).
+const BEAM_HALO_WIDTH: float = 3.2
+const BEAM_HALO_ALPHA: float = 0.3
+const BEAM_HALO_TIME_SHARE: float = 0.8
+## Das Aufleuchten hat einen weißen Kern mit diesem Anteil seiner Größe.
+const BURST_CORE_SHARE: float = 0.45
 const WEDGE_TIME: float = 0.3
 const WEDGE_SEGMENTS: int = 14
 const WEDGE_LIFT: float = 0.08
@@ -65,6 +73,17 @@ static func beam(parent: Node, from: Vector3, to: Vector3, color: Color, width: 
 	tween.tween_interval(maxf(time, 0.02) * BEAM_HOLD_SHARE)
 	tween.tween_property(node, "global_transform", thin, maxf(time, 0.02) * (1.0 - BEAM_HOLD_SHARE)).set_ease(Tween.EASE_IN)
 	tween.tween_callback(node.queue_free)
+	if pointed_end:
+		return
+	# Schein: dasselbe Netz, breiter und leuchtend, fällt etwas früher zusammen als der Kern.
+	var halo: MeshInstance3D = _mesh_node(_beam(), _glow_material(Color(color.r, color.g, color.b, BEAM_HALO_ALPHA)))
+	halo.name = "BeamHalo"
+	parent.add_child(halo)
+	halo.global_transform = Transform3D(
+		Basis(axes.x * width * BEAM_HALO_WIDTH, axes.y * length, axes.z * width * BEAM_HALO_WIDTH), middle)
+	var halo_tween: Tween = halo.create_tween()
+	halo_tween.tween_property(halo, "global_transform", thin, maxf(time, 0.02) * BEAM_HALO_TIME_SHARE).set_ease(Tween.EASE_IN)
+	halo_tween.tween_callback(halo.queue_free)
 
 
 ## Blitzlicht: heller Fächer knapp über dem Boden. origin ist die Spitze (Weltkoordinaten, schon
@@ -104,6 +123,11 @@ static func burst(parent: Node, pos: Vector3, color: Color, size: float) -> void
 	tween.tween_property(node, "scale", Vector3.ONE * size, BURST_TIME * 0.4).set_ease(Tween.EASE_OUT)
 	tween.tween_property(node, "scale", Vector3.ONE * 0.01, BURST_TIME * 0.6).set_ease(Tween.EASE_IN)
 	tween.tween_callback(node.queue_free)
+	# Weißer Kern in der Mitte: Das Aufleuchten hat so einen hellen Punkt.
+	var core: MeshInstance3D = _mesh_node(_sphere(), _glow_material(Color(1.0, 1.0, 1.0, 0.9)))
+	core.name = "BurstCore"
+	node.add_child(core)
+	core.scale = Vector3.ONE * BURST_CORE_SHARE
 
 
 ## Stachelkranz: spitze Stacheln rund um center (Weltkoordinaten, Füße), die bis zum Radius
